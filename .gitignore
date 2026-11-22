@@ -12,3 +12,4 @@ backend/evidence/
 .DS_Store
 playwright-report/
 test-results/
+*.tsbuildinfo
