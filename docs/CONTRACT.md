@@ -1,6 +1,10 @@
 # AutoQ-Trace — API & Domain Contract
 
-**Version 0.1 (draft)** · Changes via `contract/*` PRs only (see PLAN.md §4).
+**Version 0.2** · Changes via `contract/*` PRs only (see PLAN.md §4).
+
+> **v0.2 (2026-11-23): Option A ratified on all five decisions in [CONTRACT_ALIGNMENT.md](CONTRACT_ALIGNMENT.md).**
+> §10 below is binding and **overrides any conflicting v0.1 text in §1–§9**. Each conflicting v0.1 paragraph is
+> marked *(superseded by §10.x)*.
 
 This is the handshake between frontend (`frontend/`) and backend (`backend/`). The backend implements it;
 the frontend mocks it until the backend is live. Once the backend serves `/openapi.json`, generated types are
@@ -100,7 +104,7 @@ PASS ──new inspection (containment recheck)──▶ PASS | HOLD | REJECT
   - score ≥ reject threshold → `REJECT`; hold threshold ≤ score < reject → `HOLD`; else `PASS`
   - thresholds tightened while a containment is active on the unit's line (configurable %).
 
-### 4.2 Passport
+### 4.2 Passport *(superseded by §10.1–10.2)*
 - **Issued automatically** when an inspection results in `PASS` and the unit has no passport. Signed then; payload immutable.
 - `ACTIVE` → `HELD` (containment or recall hold) → `ACTIVE` (hold released) · any → `REVOKED` (terminal; e.g. later REJECT).
 - **Resolution of the brief's contradiction:** passports *may* be issued during containment (they prove quality evidence), but the unit is **dispatch-ineligible** until containment clears. `dispatch_eligible` is always computed, never stored, and it is the only thing the dispatch gate trusts besides the signature.
@@ -108,7 +112,7 @@ PASS ──new inspection (containment recheck)──▶ PASS | HOLD | REJECT
 ### 4.3 Dispatch eligibility (computed; blockers list is exhaustive)
 A unit is `dispatch_eligible` iff: quality_status `PASS` ∧ passport `ACTIVE` ∧ no active containment covering its lot ∧ not in an active recall.
 
-### 4.4 4M containment
+### 4.4 4M containment *(superseded by §10.1)*
 ```
 FourMEvent created ──▶ Containment ACTIVE
    rule (configurable, per policy):
@@ -134,7 +138,7 @@ SEALED ──recheck SUSPICIOUS──▶ SEAL_REVIEW ──QE re-enroll──▶
 `INTACT | SUSPICIOUS | UNVERIFIABLE`. Quality gate failure, too few keypoints, failed homography → `UNVERIFIABLE`, never INTACT/SUSPICIOUS.
 Loading requires an `INTACT` recheck newer than `policy.seal_recheck_max_age_minutes` (default 60), or a fresh one attached to the scan.
 
-### 4.7 Shipment / manifest
+### 4.7 Shipment / manifest *(departure rules superseded by §10.4)*
 `OPEN ──close (reconciled)──▶ CLOSED ──DEPARTED──▶ IN_TRANSIT ──DELIVERED──▶ DELIVERED`
 Close fails (409) if loaded units ≠ order qty (policy may allow partial), any provisional offline scans unsynced, or any loaded package now held.
 
@@ -174,7 +178,7 @@ Both ACCEPTED and BLOCKED scans are persisted. Gates after a hard identity failu
 
 ---
 
-## 6. Tokens & crypto
+## 6. Tokens & crypto *(payload shapes superseded by §10.3)*
 
 - Ed25519. Token = `AQ1.` + base64url(canonical JSON payload) + `.` + base64url(signature over the exact payload bytes).
 - Canonical JSON: UTF-8, keys sorted lexicographically, no insignificant whitespace, no floats (use strings/ints).
@@ -280,7 +284,7 @@ Both ACCEPTED and BLOCKED scans are persisted. Gates after a hard identity failu
 ```
 Location buckets come only from scan + movement events: `at_plant` (no accepted load), `loaded` (accepted load, shipment not DEPARTED), `in_transit` (DEPARTED, no DELIVERED), `delivered`.
 
-### 8.4 Recall result
+### 8.4 Recall result *(extended by §10.4)*
 ```jsonc
 { "id": "rcl_…", "scope": { "type": "HEAT", "id": "heat_…", "label": "H-7781" }, "reason": "…", "executed_by": "qm.farhan",
   "executed_at": "…", "query_ms": 41,
@@ -312,7 +316,7 @@ Baseline is per `method_version`; changing method version resets to `COLLECTING`
   "approved_by": null, "approved_at": null }
 ```
 
-### 8.7 Offline
+### 8.7 Offline *(hardened by §10.3)*
 ```jsonc
 // GET /offline/snapshot?shipment_id=…  → { "token": "AQ1.<SNAP payload>.<sig>" } where payload:
 { "v": 1, "typ": "SNAP", "kid": "…", "id": "snap_…", "iat": …, "exp": …,             // exp = iat + policy.snapshot_ttl (default 4h)
@@ -348,3 +352,52 @@ Agreed fixed data so frontend mocks and backend seed look identical:
 - No active containments at reset — the demo creates the 4M event live.
 
 Names are fictional and must not imply any OEM endorsement.
+
+
+---
+
+## 10. v0.2 binding deltas (Option A)
+
+### 10.1 RED containment and release timing (decision 1)
+- Each 4M event creates its own **containment run**: `{run_id, event_id, affected_unit_ids, containment_required_qty, containment_cleared_qty, sequence_epoch, status: ACTIVE|READY_FOR_CLEARANCE|CLEARED, policy_version}`. Overlapping events produce separate runs; every applicable run must be CLEARED.
+- Counter: a qualifying **individual PASS on a distinct unit, in production order**, counts once per epoch. A retried PASS on the same unit counts once. HOLD earns zero credit, and the unit stays unresolved. **Any REJECT resets `containment_cleared_qty` to 0** and increments `sequence_epoch`. Earlier evidence is preserved.
+- Reaching the required quantity moves the run to `READY_FOR_CLEARANCE`. Only a `quality_manager` with a reason moves it to `CLEARED`. Otherwise the request fails with `409 CONTAINMENT_NOT_SATISFIED`.
+- **No passport is minted or activated while any applicable run is not CLEARED.** A PASS during RED persists `{"verdict":"PASS","passport":null}`. Explicit issuance returns `409 CONTAINMENT_ACTIVE`. An already-signed passport stays readable but is dispatch-ineligible.
+- Units affected during RED require `INDIVIDUAL_100PCT`. After clearance, their passports carry `four_m_tagged: true`.
+- Numeric threshold tightening is optional and only valid with a calibrated profile. Applied thresholds are recorded with the policy version.
+
+### 10.2 Genealogy, sampling and passport meaning (decision 2)
+- `Part.is_a_part: bool`. New lots take exactly one heat; the `heat_ids` array is kept for history.
+- `POST /lots/{id}/freeze-and-sample {policy_version}` returns `{lot_id, frozen_at, sample_unit_ids, policy_version}`. Adding units to a frozen lot fails with `409 LOT_FROZEN`. A failed or incomplete sample holds release.
+- Passport adds `inspection_basis: INDIVIDUAL_100PCT|SAMPLED_LOT`, `authorizing_inspection_ids[]`, `evidence_digests[]`, `four_m_tagged`, `superseded_by_passport_id`, and `status: ACTIVE|HELD|REVOKED|SUPERSEDED`.
+- `SAMPLED_LOT` is allowed only for a GREEN, non-A-part lot in which every frozen sample unit passed. Every A-part unit and every unit affected during RED requires its own PASS.
+- Eligibility is recomputed live from the basis, policy, the unit's own failure history and all holds. A qualifying individual reinspection supersedes a sampled passport; the old signed bytes are kept. There is one current passport per unit, and `POST /passports/issue {unit_id}` is idempotent.
+- Demo seed: lot `L-2611-A` has 48 units produced, 40 of them ordered/packed. Seeding is an explicit dev command; `POST /demo/reset` (admin, `AUTOQ_DEMO=1`) remains available for the UI.
+
+### 10.3 Signed bytes, trust and offline replay (decision 3)
+Envelope (unchanged): `AQ1.<b64url(canonical payload)>.<b64url(Ed25519 sig over payload bytes)>`. Canonical JSON means UTF-8, recursively sorted keys, no whitespace, array order preserved, no floats, ASCII claim names and JS-safe integers. Payload `v: 2`:
+```json
+{"v":2,"typ":"PP","kid":"k1","id":"pp2","iat":1795300000,"unit":"u1","serial":"S1","lot":"L1","part":"PN1","heats":["H1"],"inspection_basis":"INDIVIDUAL_100PCT","authorizing_inspection_ids":["i7"],"evidence_digests":["sha256:…"],"four_m_tagged":true}
+{"v":2,"typ":"PKG","kid":"k1","id":"pkg1","iat":1795300000,"label":"PKG-1","order":"o1","items":["pp2"],"seal":"<hex>","seal_revision_id":"sr2"}
+{"v":2,"typ":"SNAP","kid":"k1","id":"sn2","iat":1795300000,"exp":1795314400,"shipment":"s1","order":"o1","part":"PN1","device_id":"d1","operator_id":"op1","policy_version":"p2","expected_units":6,"allowed_packages":["pkg1"],"held":[],"revoked_kids":[],"keys":[{"kid":"k1","public_key":"B64URL","status":"ACTIVE","not_before":1795000000,"not_after":1796000000}]}
+```
+- Verifiers check type, version, shape, the original bytes and key policy. Retired keys still verify records issued inside their validity window; revoked keys block live use. v1 credentials can be inspected historically but cannot satisfy v2 release. Reissue or reseal them.
+- The snapshot signer is trusted through keys obtained over authenticated TLS, never from the snapshot itself. `expected_units` is the remaining order capacity after all committed loads at issuance. An expired snapshot gives `LOCAL_BLOCK` / `SNAPSHOT_STALE`.
+- `POST /sync/scans`: the hash projection is unchanged. The server binds the device and operator, requires the **contiguous next seq**, binds each event to its snapshot, and rejects a changed-content retry with the same id. Checkpoint and results commit together. A broken chain returns `{"results":[],"chain":{"ok":false,"broken_at":N,"server_head":"…"}}` and advances nothing. `LOCAL_BLOCK` events never load. A conflicting provisional accept returns `CONFLICT` plus a durable `segregation_task_id`; replays never create a second task. Outcome enums stay `ACCEPTED|BLOCKED|DUPLICATE|CONFLICT`.
+
+### 10.4 Departure, locking and mixed-lot recall (decision 4)
+- An accepted load is a `LOAD_ACCEPTED` fact. `/close` prepares the manifest. `POST /shipments/{id}/events {type:"DEPARTED"}` re-runs every gate in **one transaction**, writes `manifest_sha256` and records the movement. `occurred_at` is validated and stored separately from `recorded_at`. `DELIVERED` requires a prior departure.
+- Lock order for every transition: **heat → lot → unit → package → order → shipment**, ascending id within each class. Memberships are re-read under lock. There is one active load per package (unique) and one result per `client_event_id`; reusing an id with different content is rejected.
+- Recall result adds `unit_counts: {at_plant, loaded_not_departed, in_transit, delivered}` (distinct units, one bucket each, unpackaged stock included) and `held_package_ids` (every whole package containing an affected unit, counted once). Clean units in mixed packages keep their own lineage.
+- Durable `segregation_tasks`: `REMOVAL_REQUIRED` (quarantine committed before departure, which blocks departure), `IN_TRANSIT_RECALL` (departure committed first), `NOTIFY_CUSTOMER` (delivered) and `SEGREGATION_REQUIRED` (rejected offline stage). `GET /segregation-tasks`, `POST /segregation-tasks/{id}/complete {reason}`. Repeated recall or replay never duplicates an open task.
+
+### 10.5 Evidence, seals, SPC, alerts, reports, platform (decision 5)
+- **Seal check** adds `revision_id`, `quality_gate`, `evidence{reference_url,probe_url,aligned_url,diff_url}` and `evidence_source: LIVE_CAPTURE|PRERECORDED_EVAL|SYNTHETIC_TEST`. Bad or ambiguous registration gives `UNVERIFIABLE`, which blocks loading. Only a registered discrepancy is `SUSPICIOUS`. Unpack or reseal invalidates checks and the PKG token (`POST /packages/{id}/unpack {reason}`).
+- **Inspection** adds `evidence_source`. Uncalibrated input gives `analysis.calibrated=false, score=null, verdict=HOLD`. Original bytes are hashed. Aligned and diff artifacts are produced only after valid registration. The verdict set stays `PASS|HOLD|REJECT`.
+- **SPC**: baselines are frozen per (part, station, method_version). `z`/`cusum` are `null` while `COLLECTING`/`LOW_VARIANCE`. Rules are upper CUSUM plus `FIVE_RISING`, with one persisted warning per inspection/baseline.
+- **Alerts**: persisted alerts plus a transactional outbox. `POST /alerts/{id}/ack {reason}` and `POST /alerts/{id}/resolve {reason}`. WebSocket at `WSS /ws/events?ticket=<single-use>`, ticket from `POST /api/v1/ws/tickets`. Envelope: `{event_id,type,severity,audible_siren,entity_type,entity_id,reason_codes,timestamp,payload}`; types `ALERT_CREATED|ALERT_RESOLVED|PASSPORT_REVOKED|LOT_4M_CHANGED|DISPATCH_STATE_CHANGED|SEGREGATION_TASK_CREATED|SPC_DRIFT_WARNING`. Events are published only after commit. Clients catch up via REST and deduplicate by `event_id`.
+- **8D**: `POST /reports/8d {source:{type,id}}`, `GET /reports/{id}`, `GET /reports/{id}/pdf`, `POST /reports/{id}/approve {reason, review_evidence_ids}`. A report is a frozen evidence snapshot. D4, D6 and D8 stay `PENDING_HUMAN` without evidence.
+- **Platform**: existing flat paths, lower-case roles and the `{error:{code,message,details}}` envelope are kept. `details` may carry `component, remediation, reason_codes, request_id`. Evidence is fetched as an authorized blob with a bearer header (no token in the URL). Python 3.12. The LAN HTTPS gateway is a separate compose override.
+
+### 10.6 Ownership (ratified)
+See [WORK_SPLIT.md](WORK_SPLIT.md). **Astra (GPT)** owns component CV, seal CV, SPC, AQ1 crypto, the 8D PDF renderer, the LAN HTTPS gateway and the WS bus/schema. **Opus (Claude)** owns all UI, DB/migrations, transactional services, auth/storage/outbox, route registration, shared manifests, generated OpenAPI and the integration of Astra's modules.

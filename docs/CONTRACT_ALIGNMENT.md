@@ -1,5 +1,7 @@
 # Contract alignment for joint approval
 
+> **Decision recorded 2026-11-23 — Sudipta (Opus side): Approve Option A on #1–#5.** Ratified into [CONTRACT.md §10](CONTRACT.md#10-v02-binding-deltas-option-a). Work split in [WORK_SPLIT.md](WORK_SPLIT.md) accepted.
+
 **Review baseline:** `main = d19c429`, `origin/fe/foundation = c120452`. Main defines wire contract v0.1; foundation implements browser mocks and a scanner. Neither contains a live Python backend. This document proposes five decisions. The existing contract stays in force until the reviewers record their choices.
 
 **Reply:** `Approve Option A on #1–#5.` For exceptions, reply with each number and choice. Decisions 1–3 share the passport version: choosing sampled release in #2 requires the signed evidence fields in #3; RED release must always follow the rule selected in #1. Resolve an incompatible combination before implementing it.
