@@ -1,0 +1,11 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: autoq
+      POSTGRES_PASSWORD: autoq-dev
+      POSTGRES_DB: autoq
+    ports: ["5432:5432"]
+    volumes: [autoq-db:/var/lib/postgresql/data]
+volumes:
+  autoq-db:
