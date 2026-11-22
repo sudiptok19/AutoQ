@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AutoQ-Trace WebSocket event",
+  "type": "object",
+  "required": [
+    "event_id",
+    "type",
+    "severity",
+    "audible_siren",
+    "entity_type",
+    "entity_id",
+    "reason_codes",
+    "timestamp",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1 },
+    "type": {
+      "enum": [
+        "ALERT_CREATED",
+        "ALERT_RESOLVED",
+        "PASSPORT_REVOKED",
+        "LOT_4M_CHANGED",
+        "DISPATCH_STATE_CHANGED",
+        "SEGREGATION_TASK_CREATED",
+        "SPC_DRIFT_WARNING"
+      ]
+    },
+    "severity": { "enum": ["INFO", "MEDIUM", "HIGH", "CRITICAL"] },
+    "audible_siren": { "type": "boolean" },
+    "entity_type": { "type": "string", "minLength": 1 },
+    "entity_id": { "type": "string", "minLength": 1 },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "payload": {
+      "type": "object",
+      "propertyNames": { "type": "string" },
+      "additionalProperties": { "$ref": "#/$defs/json_value" }
+    }
+  },
+  "$defs": {
+    "json_value": {
+      "type": ["null", "boolean", "number", "string", "array", "object"],
+      "items": { "$ref": "#/$defs/json_value" },
+      "propertyNames": { "type": "string" },
+      "additionalProperties": { "$ref": "#/$defs/json_value" }
+    }
+  }
+}
