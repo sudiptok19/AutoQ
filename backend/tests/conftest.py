@@ -1,4 +1,7 @@
-"""Integration tests run against a REAL PostgreSQL 16 (`make db`), in a dedicated `autoq_test` database."""
+"""Integration tests run against a REAL PostgreSQL 16 (`make db`), in a dedicated `autoq_test` database.
+
+Tests marked `@pytest.mark.nodb` (e.g. Astra's pure CV/SPC/crypto/PDF/WS modules) never touch the
+database: the DB is created lazily only when a non-`nodb` test runs."""
 import base64
 import os
 from pathlib import Path
@@ -27,6 +30,12 @@ def _environment(tmp_path_factory):
     from app.db.session import engine, session_factory
     for f in (settings, engine, session_factory):
         f.cache_clear()
+    yield
+    engine().dispose()
+
+
+@pytest.fixture(scope="session")
+def _database(_environment):
     try:
         with psycopg.connect(ADMIN_URL, autocommit=True, connect_timeout=3) as c:
             c.execute(f"DROP DATABASE IF EXISTS {TEST_DB} WITH (FORCE)")
@@ -39,12 +48,14 @@ def _environment(tmp_path_factory):
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parents[1] / "alembic"))
     cfg.attributes["database_url"] = os.environ["DATABASE_URL"]
     command.upgrade(cfg, "head")
-    yield
-    engine().dispose()
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
+def clean_db(request):
+    if request.node.get_closest_marker("nodb"):
+        yield
+        return
+    request.getfixturevalue("_database")
     from sqlalchemy import text
 
     from app.db.models import Base
