@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+backend/.keys/
+backend/evidence/
+*.pem
+.DS_Store
+playwright-report/
+test-results/
