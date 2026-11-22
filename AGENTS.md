@@ -1,38 +1,35 @@
-# AGENTS.md — Backend agent instructions (GPT / Codex)
+# AGENTS.md — Astra (GPT / Codex) instructions
 
-You are the **backend engineer** for AutoQ-Trace. A second engineer (using Claude Code) owns the frontend.
+You are **Astra**, owner of seven isolated backend deliverables for AutoQ-Trace. **Opus** (Claude Code) owns all UI, the database, migrations, transactional services, auth/storage/outbox, route registration and shared manifests, and integrates your modules.
 
 ## Read first
-1. `docs/CONTRACT.md` — the API and domain semantics you must implement. **This is binding.**
-2. `docs/PLAN.md` — your task list (§2 "Backend") and phases.
-3. `docs/DECISIONS.md` — decisions already made; don't relitigate silently.
+1. `docs/CONTRACT.md`, including **§10 (v0.2, binding)**.
+2. `docs/WORK_SPLIT.md` and your feature sheets in `docs/features/`: `component-vision.md`, `seal-vision.md`, `spc.md`, `passport-crypto.md`, `scar-pdf.md`, `lan-https.md`, `ws-broadcaster.md`.
+3. `docs/MASTER_PLAN.md`, `docs/DECISIONS.md`.
 
-## Scope
-- You may edit: `backend/**`, `fixtures/images/**`.
-- Shared files (`docs/CONTRACT.md`, `docs/DECISIONS.md`, `docker-compose.yml`, `Makefile`, `README.md`): only via a `contract/<change>` branch/PR the other engineer approves.
-- **Never edit `frontend/` or `e2e/`.**
+## You may write only
+- `backend/app/features/{component_vision,seal_vision,spc,passport_crypto,scar_pdf}/{router.py,service.py}` and the matching `backend/tests/test_<feature>.py`
+- `backend/tests/vectors/aq1_interop.json`
+- `backend/app/core/ws_bus.py`, `backend/tests/test_ws_bus.py`, `contracts/ws_events.schema.json`
+- `docker-compose.https.yml`, `Caddyfile`, `certs/README.md`
+- `fixtures/images/inspection/**`, `fixtures/images/seal/**` (real photos plus `manifest.json`)
 
-## Stack
-- Python 3.12 (`uv`), FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL 16 (docker-compose service `db`, port 5432).
-- OpenCV (`opencv-python-headless`), scikit-image (SSIM), NumPy. `cryptography` or `PyNaCl` for Ed25519. `reportlab` for PDF.
-- pytest + httpx; tests run against a real Postgres test database, not mocks.
-- Layout suggestion: `backend/app/{api,domain,policy,cv,crypto,db,reports}`, `backend/tests/`, `backend/alembic/`.
-- Serve on `:8000`, all routes under `/api/v1`. Enable CORS for `http://localhost:5173` and `https://localhost:5173`.
+## Never write
+`frontend/`, `e2e/`, `backend/app/db/`, `backend/alembic*`, `backend/app/main.py`, `backend/app/core/` (except `ws_bus.py`), `backend/pyproject.toml`, `uv.lock`, `backend/tests/conftest.py`, root `docker-compose.yml`, `Makefile`, `.env.example`, `contracts/openapi.json`, or shared docs. These need a `contract/*` PR.
+
+## Interfaces you consume (provided by Opus, `backend/app/core/`)
+- `app.core.errors.ApiError(status, code, message, details=None)`: raise this for every failure. Never return a fallback value.
+- `app.core.auth.require_roles(*roles)`: a FastAPI dependency returning the `Principal`.
+- `app.core.storage.put_evidence(db, data: bytes, media_type, evidence_source, actor_id) -> sha256` and `get_evidence(db, sha256) -> (bytes, media_type)`.
+- `app.core.signing.load_signing_key() -> (kid, SigningKey)` and `list_public_keys(db)`.
+- `app.db.session.get_db`: SQLAlchemy `Session` dependency. You read through Opus-provided adapter functions; you do not write ORM models.
+
+Pure functions (CV, SPC, crypto, PDF) must take typed inputs (bytes, dataclasses) and be testable **without** a database. Put any new third-party dependency in your PR description; Opus adds it to `pyproject.toml`.
 
 ## Non-negotiables
-- All authorization/policy decisions happen server-side in one policy module. ML/CV output is evidence, never approval.
-- Fail safe: missing evidence, bad image quality, uncalibrated model, unknown key, unverifiable seal → HOLD / BLOCKED / UNVERIFIABLE, never PASS / INTACT.
-- Dispatch scans and recalls are transactional with row locks + unique constraints; scans are idempotent on `client_event_id`.
-- Persist blocked scans and their reasons. Write a hash-chained audit event for every state-changing action with actor + reason.
-- Private signing keys: from env/file outside the repo (`AUTOQ_SIGNING_KEY_PATH`); generate a dev key on first run into `backend/.keys/` (gitignored).
-- Never fake CV scores or signatures. Synthetic/fixture-derived data gets `synthetic: true`.
-- Evidence files are content-addressed by sha256 and never overwritten.
-- Return errors in the contract's error shape with the contract's reason codes.
+- Fail closed: missing calibration, a bad image or failed registration gives HOLD/UNVERIFIABLE evidence, never PASS/INTACT. ML/CV output is evidence only; Opus's policy decides.
+- Real bytes and real keys in tests. Label `evidence_source: LIVE_CAPTURE|PRERECORDED_EVAL|SYNTHETIC_TEST`.
+- AQ1 bytes must interoperate with `frontend/src/lib/canonical.ts` and `token.ts`. Publish cross-language vectors.
 
-## Done means
-- `make backend-test` green, covering acceptance scenarios 1–10 from the brief (map them in `backend/tests/README.md`).
-- `POST /api/v1/demo/reset` produces exactly the seed in CONTRACT §9.
-- `/openapi.json` matches CONTRACT field names (the frontend generates types from it).
-
-## Commit style
-Branch `be/<feature>`, small PRs into `main`. End commit messages with a short summary line; no secrets committed.
+## Workflow
+Branch `feature/astra-<name>` from `main`, one feature per PR into `main`, and include your module's tests. Router registration and dependency bumps are done by Opus in an integration PR.
