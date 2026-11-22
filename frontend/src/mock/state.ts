@@ -30,6 +30,7 @@ export interface MockState {
   customers: Customer[]; orders: Order[]; packages: Package[]; seal_checks: SealCheck[]; shipments: Shipment[]; scans: ScanDecision[]
   recalls: Recall[]; audit: AuditEvent[]; evidence: Record<string, string>; spc: SpcRow[]; policies: Policies; alerts_acked: string[]
   reports: any[]
+  device_heads?: Record<string, { head: string; seq: number }>
 }
 
 const KEY = 'autoq-mock-v1'
@@ -39,6 +40,11 @@ export const now = () => new Date().toISOString()
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
 
 export function nextId(prefix: string) { S.counter++; return `${prefix}_${S.counter.toString(36).padStart(6, '0')}` }
+
+/* Cross-tab: another tab (e.g. the phone scanner view) wrote newer state → reload before the next request. */
+let dirty = false
+if (typeof window !== 'undefined') window.addEventListener('storage', e => { if (e.key === KEY) dirty = true })
+export function refreshIfStale() { if (dirty) { dirty = false; load() } }
 
 export function save() { try { localStorage.setItem(KEY, JSON.stringify(S)) } catch { /* quota or private mode: state stays in memory */ } }
 export function load(): boolean {
