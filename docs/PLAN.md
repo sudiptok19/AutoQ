@@ -1,5 +1,7 @@
 # AutoQ-Trace — Team Plan
 
+> **Ownership revised 2026-11-23 (v0.2).** The split below is superseded by [WORK_SPLIT.md](WORK_SPLIT.md): Opus (Claude) owns UI plus DB/transactional backend; Astra (GPT) owns component CV, seal CV, SPC, AQ1 crypto, 8D PDF, LAN HTTPS gateway and WS bus. Branches are now `feature/opus-<name>` / `feature/astra-<name>`; shared contract changes stay on `contract/*`.
+
 Two people, two coding agents, one repo. The split is designed so neither person waits on the other:
 the **API contract** ([CONTRACT.md](CONTRACT.md)) is the handshake, and the frontend develops against
 mocks generated from it until the backend is live.
