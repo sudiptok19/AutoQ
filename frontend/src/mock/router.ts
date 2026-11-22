@@ -2,7 +2,8 @@
 import type { Containment, Eligibility, FourMEvent, GateCheck, Inspection, Lot, Package, Reason, Recall, RecallImpact, Role, ScanDecision, SealCheck, Shipment, SpcSeries, TraceGraph, TraceNode, TraceEdge, User } from '../api/types'
 import { goldenDiff, loadImageData, qualityGate, renderBracket } from '../lib/cv'
 import { verifyToken, sha256Hex } from '../lib/token'
-import { S, audit, init, issuePassport, nextId, now, save, seed, signPackage, sign, verifyAudit, type UnitRow } from './state'
+import { GENESIS, verifyChain } from '../lib/chain'
+import { refreshIfStale, S, audit, init, issuePassport, nextId, now, save, seed, signPackage, sign, verifyAudit, type UnitRow } from './state'
 
 export class HttpError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: any) { super(message) }
@@ -572,15 +573,33 @@ r('GET', '/offline/snapshot', async c => {
 r('POST', '/sync/scans', async c => {
   const user = need(c, 'dispatcher')
   const results = []
+  const dev = String(c.body?.device_id ?? '')
+  S.device_heads ??= {}
+  const known = S.device_heads[dev] ?? { head: GENESIS, seq: 0 }
+  const fresh = ((c.body?.events ?? []) as any[]).filter(e => e.seq > known.seq).sort((a, b) => a.seq - b.seq)
+  const chain = verifyChain(fresh, known.head)
+  if (!chain.ok) {
+    audit(user.username, 'DEVICE_CHAIN_BROKEN', 'device', dev, `Event chain broken at seq ${chain.broken_at}`)
+    save()
+    return { results: [], chain: { ok: false, broken_at: chain.broken_at, server_head: known.head } }
+  }
+  if (fresh.length) S.device_heads[dev] = { head: fresh.at(-1).hash, seq: fresh.at(-1).seq }
   for (const e of c.body?.events ?? []) {
     const prior = S.scans.find(x => x.client_event_id === e.client_event_id)
     if (prior) { results.push({ client_event_id: e.client_event_id, outcome: 'DUPLICATE', scan: prior, note: 'Already synced' }); continue }
     const s = S.shipments.find(x => x.id === e.shipment_id); if (!s) { results.push({ client_event_id: e.client_event_id, outcome: 'BLOCKED', note: 'Unknown shipment' }); continue }
+    if (e.local_decision !== 'PROVISIONAL_ACCEPT') {
+      // Blocked on the device → never physically loaded. Record the attempt; never count it.
+      const d = await runGate(s, e.token, user.username, e.client_event_id, { commit: false })
+      const rec = { ...d, decision: 'BLOCKED' as const, offline: true, reasons: e.local_reasons?.length ? e.local_reasons : d.reasons, shipment_id: s.id }
+      S.scans.push(rec); audit(user.username, 'OFFLINE_SCAN_RECORDED', 'shipment', s.id, 'blocked on device', { client_event_id: e.client_event_id })
+      results.push({ client_event_id: e.client_event_id, outcome: 'BLOCKED', scan: rec, note: 'Blocked on device — recorded, not loaded' }); continue
+    }
     const d = await runGate(s, e.token, user.username, e.client_event_id, { commit: true }); d.offline = true
     const conflict = (e.local_decision === 'PROVISIONAL_ACCEPT') !== (d.decision === 'ACCEPTED')
     results.push({ client_event_id: e.client_event_id, outcome: conflict ? 'CONFLICT' : d.decision, scan: d, note: conflict ? (d.decision === 'BLOCKED' ? `Server blocked: ${d.reasons.map(x => x.code).join(', ')} — physically unload ${d.package_label}` : 'Server accepted a locally-blocked scan') : '' })
   }
-  save(); return { results, chain: { ok: true } }
+  save(); return { results, chain: { ok: true, server_head: S.device_heads[dev]?.head ?? GENESIS } }
 })
 
 /* ── dispatcher ── */
@@ -588,6 +607,7 @@ let ready: Promise<void> | null = null
 export async function mockFetch(method: string, path: string, headers: Record<string, string>, body: any): Promise<{ status: number; json: any }> {
   ready ??= init()
   await ready
+  refreshIfStale()
   await new Promise(res => setTimeout(res, 90 + Math.random() * 140))
   const url = new URL(path, 'http://mock')
   const p = url.pathname.replace(/^\/api\/v1/, '')
