@@ -27,4 +27,7 @@ make contracts     # write contracts/openapi.json
 | Transactional outbox table + `emit()` | implemented, relay pending WS bus |
 | Signing-key custody (`app/core/signing.py`), `/health` 503 without key | implemented + verified |
 
+| Catalog (suppliers, parts with `is_a_part`, lines, customers), heats with certificate evidence, single-heat lots, serialized units (row-locked sequence), `freeze-and-sample` (systematic, reproducible, policy-versioned; A-parts get no lot sample) | implemented + verified |
+| Versioned policy (`GET/PUT /policies`, demo default `demo-1`) and central `policy/eligibility.py` (passport, quality, containment runs, recall holds) | implemented + verified |
+
 Interfaces Astra's modules consume are listed in `AGENTS.md`.

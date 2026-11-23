@@ -1,6 +1,99 @@
 {
   "components": {
     "schemas": {
+      "Body_add_heat_api_v1_heats_post": {
+        "properties": {
+          "certificate": {
+            "format": "binary",
+            "title": "Certificate",
+            "type": "string"
+          },
+          "heat_code": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "title": "Heat Code",
+            "type": "string"
+          },
+          "material_grade": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Material Grade",
+            "type": "string"
+          },
+          "supplier_id": {
+            "title": "Supplier Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "heat_code",
+          "supplier_id",
+          "material_grade",
+          "certificate"
+        ],
+        "title": "Body_add_heat_api_v1_heats_post",
+        "type": "object"
+      },
+      "Containment": {
+        "properties": {
+          "first_n": {
+            "default": 5,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "First N",
+            "type": "integer"
+          },
+          "lookback_minutes": {
+            "default": 30,
+            "maximum": 1440.0,
+            "minimum": 0.0,
+            "title": "Lookback Minutes",
+            "type": "integer"
+          },
+          "recheck_existing_planned": {
+            "default": false,
+            "title": "Recheck Existing Planned",
+            "type": "boolean"
+          },
+          "recheck_existing_unplanned": {
+            "default": true,
+            "title": "Recheck Existing Unplanned",
+            "type": "boolean"
+          },
+          "threshold_tightening": {
+            "default": 0.0,
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Threshold Tightening",
+            "type": "number"
+          }
+        },
+        "title": "Containment",
+        "type": "object"
+      },
+      "CustomerIn": {
+        "properties": {
+          "city": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "City",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "city"
+        ],
+        "title": "CustomerIn",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -12,6 +105,74 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Inspection": {
+        "properties": {
+          "blur_min": {
+            "default": 80,
+            "exclusiveMinimum": 0.0,
+            "title": "Blur Min",
+            "type": "number"
+          },
+          "glare_max": {
+            "default": 0.12,
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Glare Max",
+            "type": "number"
+          },
+          "hold_threshold": {
+            "default": 0.45,
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Hold Threshold",
+            "type": "number"
+          },
+          "min_h": {
+            "default": 240,
+            "minimum": 1.0,
+            "title": "Min H",
+            "type": "integer"
+          },
+          "min_w": {
+            "default": 320,
+            "minimum": 1.0,
+            "title": "Min W",
+            "type": "integer"
+          },
+          "reject_threshold": {
+            "default": 0.7,
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Reject Threshold",
+            "type": "number"
+          }
+        },
+        "title": "Inspection",
+        "type": "object"
+      },
+      "LineIn": {
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "station_id": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "station_id"
+        ],
+        "title": "LineIn",
         "type": "object"
       },
       "LoginIn": {
@@ -34,6 +195,228 @@
           "password"
         ],
         "title": "LoginIn",
+        "type": "object"
+      },
+      "LotIn": {
+        "properties": {
+          "heat_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Heat Ids",
+            "type": "array"
+          },
+          "line_id": {
+            "title": "Line Id",
+            "type": "string"
+          },
+          "lot_code": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "title": "Lot Code",
+            "type": "string"
+          },
+          "part_id": {
+            "title": "Part Id",
+            "type": "string"
+          },
+          "planned_qty": {
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Planned Qty",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lot_code",
+          "part_id",
+          "line_id",
+          "heat_ids",
+          "planned_qty"
+        ],
+        "title": "LotIn",
+        "type": "object"
+      },
+      "PartIn": {
+        "properties": {
+          "default_sample_size": {
+            "default": 5,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Default Sample Size",
+            "type": "integer"
+          },
+          "drawing_rev": {
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Drawing Rev",
+            "type": "string"
+          },
+          "inspection_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inspection Profile Id"
+          },
+          "is_a_part": {
+            "default": false,
+            "title": "Is A Part",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "part_number": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "title": "Part Number",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part_number",
+          "name",
+          "drawing_rev"
+        ],
+        "title": "PartIn",
+        "type": "object"
+      },
+      "PolicyIn": {
+        "properties": {
+          "allow_partial_close": {
+            "default": false,
+            "title": "Allow Partial Close",
+            "type": "boolean"
+          },
+          "containment": {
+            "$ref": "#/components/schemas/Containment",
+            "default": {
+              "first_n": 5,
+              "lookback_minutes": 30,
+              "recheck_existing_planned": false,
+              "recheck_existing_unplanned": true,
+              "threshold_tightening": 0.0
+            }
+          },
+          "inspection": {
+            "$ref": "#/components/schemas/Inspection",
+            "default": {
+              "blur_min": 80.0,
+              "glare_max": 0.12,
+              "hold_threshold": 0.45,
+              "min_h": 240,
+              "min_w": 320,
+              "reject_threshold": 0.7
+            }
+          },
+          "retention_years_provisional": {
+            "default": 11,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Retention Years Provisional",
+            "type": "integer"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/Sampling",
+            "default": {
+              "sample_size": 5
+            }
+          },
+          "seal_recheck_max_age_minutes": {
+            "default": 60,
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Seal Recheck Max Age Minutes",
+            "type": "integer"
+          },
+          "snapshot_ttl_minutes": {
+            "default": 240,
+            "maximum": 1440.0,
+            "minimum": 5.0,
+            "title": "Snapshot Ttl Minutes",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9._\\-]{1,32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "PolicyIn",
+        "type": "object"
+      },
+      "Sampling": {
+        "properties": {
+          "sample_size": {
+            "default": 5,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Sample Size",
+            "type": "integer"
+          }
+        },
+        "title": "Sampling",
+        "type": "object"
+      },
+      "SupplierIn": {
+        "properties": {
+          "code": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "title": "Code",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "synthetic": {
+            "default": false,
+            "title": "Synthetic",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ],
+        "title": "SupplierIn",
+        "type": "object"
+      },
+      "UnitsIn": {
+        "properties": {
+          "count": {
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "UnitsIn",
         "type": "object"
       },
       "ValidationError": {
@@ -253,6 +636,64 @@
         ]
       }
     },
+    "/api/v1/customers": {
+      "get": {
+        "operationId": "customers_api_v1_customers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Customers",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "post": {
+        "operationId": "add_customer_api_v1_customers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Customer",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
     "/api/v1/evidence/{sha256}": {
       "get": {
         "operationId": "evidence_api_v1_evidence__sha256__get",
@@ -316,6 +757,576 @@
         "summary": "Health",
         "tags": [
           "platform"
+        ]
+      }
+    },
+    "/api/v1/heats": {
+      "get": {
+        "operationId": "heats_api_v1_heats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Heats",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "post": {
+        "operationId": "add_heat_api_v1_heats_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_heat_api_v1_heats_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Heat",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/lines": {
+      "get": {
+        "operationId": "lines_api_v1_lines_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Lines",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "post": {
+        "operationId": "add_line_api_v1_lines_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LineIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Line",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/lots": {
+      "get": {
+        "operationId": "lots_api_v1_lots_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Lots",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "post": {
+        "operationId": "add_lot_api_v1_lots_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LotIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Lot",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/lots/{lot_id}": {
+      "get": {
+        "operationId": "lot_api_v1_lots__lot_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lot_id",
+            "required": true,
+            "schema": {
+              "title": "Lot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lot",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/lots/{lot_id}/freeze-and-sample": {
+      "post": {
+        "operationId": "freeze_api_v1_lots__lot_id__freeze_and_sample_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lot_id",
+            "required": true,
+            "schema": {
+              "title": "Lot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Freeze",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/lots/{lot_id}/units": {
+      "post": {
+        "operationId": "add_units_api_v1_lots__lot_id__units_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lot_id",
+            "required": true,
+            "schema": {
+              "title": "Lot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnitsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Units",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/parts": {
+      "get": {
+        "operationId": "parts_api_v1_parts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Parts",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "post": {
+        "operationId": "add_part_api_v1_parts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Part",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/policies": {
+      "get": {
+        "operationId": "get_policy_api_v1_policies_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Policy",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "put": {
+        "operationId": "put_policy_api_v1_policies_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Policy",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/suppliers": {
+      "get": {
+        "operationId": "suppliers_api_v1_suppliers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Suppliers",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      },
+      "post": {
+        "operationId": "add_supplier_api_v1_suppliers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Supplier",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/units": {
+      "get": {
+        "operationId": "units_api_v1_units_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "lot_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Units",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/units/{key}": {
+      "get": {
+        "operationId": "unit_api_v1_units__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unit",
+        "tags": [
+          "catalog",
+          "lots"
         ]
       }
     }
