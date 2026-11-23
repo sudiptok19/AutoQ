@@ -29,5 +29,10 @@ make contracts     # write contracts/openapi.json
 
 | Catalog (suppliers, parts with `is_a_part`, lines, customers), heats with certificate evidence, single-heat lots, serialized units (row-locked sequence), `freeze-and-sample` (systematic, reproducible, policy-versioned; A-parts get no lot sample) | implemented + verified |
 | Versioned policy (`GET/PUT /policies`, demo default `demo-1`) and central `policy/eligibility.py` (passport, quality, containment runs, recall holds) | implemented + verified |
+| `app/adapters/ports_impl.py`: Postgres `Ports` for Astra's routers. `/keys` (A4), `/spc/series` (A3) and `/reports/{id}/pdf` (A5) are mounted. Seal/report ports return 503 until those slices land | implemented + verified |
+| Inspections: `POST /inspections` (multipart, `evidence_source`), deterministic verdict policy, HOLD review (`REINSPECT`/`REJECT`), lot-sample state (PASSED/FAILED), SPC baseline freeze plus drift alert on write | implemented + verified (synthetic images) |
+| Passports v2 via Astra's AQ1 signer: INDIVIDUAL_100PCT on own PASS, SAMPLED_LOT on a complete passing sample, supersede-on-individual, revoke on REJECT, issuance blocked during open containment runs; `POST /passports/issue`, `GET /passports/{id}`, `POST /verify` (signature vs live eligibility reported separately) | implemented + verified |
+| **Interim** component vision (`inspection_passports/interim_vision.py`, method `interim-gd-0.1`): real OpenCV quality gate plus phase-correlation alignment and reference diff. Replaced by Astra's A1 when merged | interim, synthetic-tested only |
+| Alerts: `GET /alerts`, ack/resolve with reasons, idempotent `raise_alert`, transactional outbox relayed to Astra's WS bus; `POST /ws/tickets` (single-use, 60 s) plus `WS /ws/events?ticket=` | implemented + verified |
 
 Interfaces Astra's modules consume are listed in `AGENTS.md`.
