@@ -9,10 +9,8 @@ from app.core.errors import ApiError
 from app.db import models as m
 from app.db.session import get_db
 from app.features.packaging import service as s
-from app.ports import Ports, ports
 
 router = APIRouter(tags=["orders", "packaging"])
-interim_seal_router = APIRouter(tags=["seal-vision (interim)"])
 MAX_IMAGE = 15 * 1024 * 1024
 Any_ = Depends(current_principal)
 
@@ -112,17 +110,3 @@ def unpack(key: str, body: ReasonIn, db: Session = Depends(get_db), p: Principal
 async def re_enroll(key: str, image: UploadFile = File(), reason: str = Form(min_length=1, max_length=2000), evidence_source: str = Form("LIVE_CAPTURE"),
                     db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_engineer", "quality_manager"))) -> dict:
     return await run_in_threadpool(s.re_enroll, db, p, key, await _read(image), reason, evidence_source)
-
-
-@interim_seal_router.post("/packages/{package_id}/seal-checks")
-async def seal_check(package_id: str, image: UploadFile = File(), evidence_source: str = Form("LIVE_CAPTURE"), db: Session = Depends(get_db),
-                     p: Principal = Depends(require_roles("dispatcher", "quality_engineer", "quality_manager")), P: Ports = Depends(ports)) -> dict:
-    """INTERIM route with the same contract as Astra's A2 router; main.py mounts A2's instead once it exists."""
-    from app.features.packaging import interim_seal
-    probe = await _read(image)
-
-    def run():
-        ctx = P.load_seal_context(db, package_id, p)
-        ev = interim_seal.compare(ctx.reference_bytes, probe, ctx.profile)
-        return P.record_recheck(db, ctx, ev, probe, image.content_type or "image/jpeg", evidence_source, p)
-    return await run_in_threadpool(run)

@@ -170,10 +170,7 @@ def seal_profile(db: Session, method_version: str) -> SealProfile:
 
 
 def _seal_impl():
-    try:  # Astra's A2 when merged; interim otherwise (same signatures)
-        from app.features.seal_vision import service as impl  # type: ignore
-    except ImportError:
-        from app.features.packaging import interim_seal as impl
+    from app.features.seal_vision import service as impl  # Astra A2
     return impl
 
 

@@ -16,7 +16,7 @@ from app.db import models as m
 from app.db.locking import lock_set
 from app.features.alerts.service import raise_alert
 from app.features.containment import service as containment
-from app.features.inspection_passports import interim_vision as vision  # swapped for Astra's A1 on merge
+from app.features.component_vision import service as vision  # Astra A1 (gd-0.3)
 from app.features.inspection_passports import passports
 from app.features.spc.service import compute_series, freeze_baseline
 from app.policy import eligibility, policies
@@ -113,8 +113,8 @@ def inspect(db: Session, p: Principal, unit_key: str, station_id: str | None, im
     if evidence_source not in SOURCES:
         raise ApiError(422, "EVIDENCE_SOURCE_INVALID", f"evidence_source must be one of {sorted(SOURCES)}")
     media = sniff(image)
-    if media not in ("image/jpeg", "image/png", "image/webp"):
-        raise ApiError(415, "INVALID_MEDIA", "Inspection image must be JPEG, PNG or WebP")
+    if media not in ("image/jpeg", "image/png"):
+        raise ApiError(415, "INVALID_MEDIA", "Inspection image must be JPEG or PNG")
     unit = db.get(m.Unit, unit_key) or db.scalars(select(m.Unit).where(m.Unit.serial == unit_key)).first()
     if not unit:
         raise ApiError(404, "UNIT_NOT_FOUND", "Unit not found")
@@ -150,9 +150,9 @@ def inspect(db: Session, p: Principal, unit_key: str, station_id: str | None, im
         # a profile built for another method version cannot calibrate this one
         profile = replace(profile, thresholds=th, calibrated=profile.calibrated and profile.method_version == vision.METHOD_VERSION)
     reference = get_evidence(db, profile.reference_sha256)[0] if profile and profile.calibrated and profile.reference_sha256 else None
-    ev = vision.evaluate(image, reference, profile if profile else None)
+    ev = vision.evaluate(image, reference, profile if profile else None, evidence_source=evidence_source)
     if not profile:
-        ev = vision.VisionEvidence(ev.quality_gate, ev.analysis | {"hold_threshold": ps.hold_threshold, "reject_threshold": ps.reject_threshold}, ev.reason_codes, ev.aligned_png, ev.diff_png, ev.raw_score)
+        ev = vision.VisionEvidence(ev.quality_gate, ev.analysis | {"hold_threshold": ps.hold_threshold, "reject_threshold": ps.reject_threshold}, ev.reason_codes, ev.aligned_png, ev.diff_png, ev.raw_score, evidence_source)
 
     img_sha = put_evidence(db, image, media, evidence_source, p.id)
     aligned_sha = put_evidence(db, ev.aligned_png, "image/png", evidence_source, p.id) if ev.aligned_png else None
