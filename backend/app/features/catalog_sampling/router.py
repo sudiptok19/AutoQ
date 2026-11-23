@@ -165,3 +165,27 @@ def put_policy(body: PolicyIn, db: Session = Depends(get_db), p: Principal = Adm
     pol = policies.publish(db, policies.PolicySettings.model_validate(data), p.id, version=body.version)
     audit.append(db, p.username, "POLICY_PUBLISHED", "policy", pol.id, data={"version": pol.version})
     return policies.view(pol)
+
+
+class ProfileIn(BaseModel):
+    part_id: str
+    station_id: str
+
+
+@router.post("/inspection-profiles", status_code=201)
+def add_profile(body: ProfileIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_engineer", "quality_manager"))):
+    return s.create_profile(db, p, body.part_id, body.station_id)
+
+
+@router.get("/inspection-profiles/{profile_id}")
+def get_profile(profile_id: str, db: Session = Depends(get_db), _: Principal = Any_):
+    return s.profile_row_view(db, s._get(db, m.InspectionProfile, profile_id, "profile"))
+
+
+@router.post("/inspection-profiles/{profile_id}/calibrate")
+async def calibrate(profile_id: str, hold: float = Form(gt=0, lt=1), reject: float = Form(gt=0, le=1), reason: str = Form(min_length=1, max_length=2000),
+                    evaluation: UploadFile = File(), db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_manager"))):
+    data = await evaluation.read(1_000_001)
+    if len(data) > 1_000_000:
+        raise ApiError(413, "EVALUATION_TOO_LARGE", "Evaluation report larger than 1 MB")
+    return await run_in_threadpool(s.calibrate_profile, db, p, profile_id, hold, reject, data, reason)

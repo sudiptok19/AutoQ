@@ -1,6 +1,7 @@
 """Content-addressed, immutable evidence store. Files live at <dir>/ab/cd/<sha256>; the row in
 `evidence` is the index. Writes are idempotent; reads re-hash the bytes (fail closed on corruption)."""
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -13,7 +14,7 @@ from app.core.errors import ApiError
 from app.db import models as m
 
 MAX_BYTES = 15 * 1024 * 1024
-ALLOWED = {"image/jpeg", "image/png", "application/pdf", "image/webp"}
+ALLOWED = {"image/jpeg", "image/png", "application/pdf", "image/webp", "application/json"}
 SOURCES = {"LIVE_CAPTURE", "PRERECORDED_EVAL", "SYNTHETIC_TEST", "UPLOAD"}
 _MAGIC = {"image/jpeg": (b"\xff\xd8\xff",), "image/png": (b"\x89PNG\r\n\x1a\n",), "application/pdf": (b"%PDF-",), "image/webp": (b"RIFF",)}
 
@@ -23,6 +24,12 @@ def _path(sha: str) -> Path:
 
 
 def sniff(data: bytes) -> str | None:
+    if data[:1] in (b"{", b"["):
+        try:
+            json.loads(data)
+            return "application/json"
+        except ValueError:
+            return None
     for mt, sigs in _MAGIC.items():
         if any(data.startswith(s) for s in sigs):
             return mt

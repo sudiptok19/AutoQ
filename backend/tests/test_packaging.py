@@ -8,7 +8,8 @@ from app.core.auth import load_principal
 from app.core.errors import ApiError
 from app.db import models as m
 from app.features.inspection_passports.passports import trusted_keys
-from app.features.packaging import interim_seal, service as pkgsvc
+from app.features.packaging import service as pkgsvc
+from app.features.seal_vision import service as seal_vision
 from app.features.passport_crypto.service import verify as astra_verify
 from tests.seal_fixtures import render_seal
 from tests.test_inspection_passports import inspect, lot_with_units
@@ -146,7 +147,7 @@ def test_recheck_against_stale_revision_is_refused(client, auth, db):
     add(client, auth, p["id"], units[0]["id"])
     seal(client, auth, p["id"])
     ctx = pkgsvc.load_seal_context(db, p["id"])                       # analysis starts on revision 1 ...
-    ev = interim_seal.compare(ctx.reference_bytes, render_seal("intact", 1), ctx.profile)
+    ev = seal_vision.compare(ctx.reference_bytes, render_seal("intact", 1), ctx.profile)
     db.rollback()
     client.post(f"{API}/packages/{p['id']}/unpack", json={"reason": "reseal"}, headers=auth("op.ravi"))
     seal(client, auth, p["id"], seed=3)                                # ... meanwhile resealed as revision 2
