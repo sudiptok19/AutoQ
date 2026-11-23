@@ -35,8 +35,10 @@ def _iso(dt):
 
 
 def _shipped_unit_ids(db: Session):
+    """Units that have physically LEFT the plant. Loaded-but-not-departed stock is still on site and stays in scope."""
     return (select(m.PackageItem.unit_id).join(m.Load, (m.Load.package_id == m.PackageItem.package_id) & m.Load.removed_at.is_(None))
-            .where(m.PackageItem.removed_at.is_(None)))
+            .join(m.Shipment, m.Shipment.id == m.Load.shipment_id)
+            .where(m.PackageItem.removed_at.is_(None), m.Shipment.status.in_(("IN_TRANSIT", "DELIVERED"))))
 
 
 def _credits(db: Session, run: m.ContainmentRun) -> int:
