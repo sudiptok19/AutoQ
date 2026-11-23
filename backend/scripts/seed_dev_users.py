@@ -1,5 +1,5 @@
-"""DEV ONLY: create the five documented development accounts (password `autoq-dev`) and register
-the signing key's public half. Run explicitly; never executed on server start."""
+"""DEV ONLY: create the five documented development accounts (password `autoq-dev`), register
+the signing key's public half, and publish the DEMONSTRATION default policy `demo-1` if none is active. Run explicitly; never executed on server start."""
 import sys
 from pathlib import Path
 
@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert  # noqa: E402
 
 from app.core.auth import hash_password  # noqa: E402
 from app.core.signing import register_active_key  # noqa: E402
+from app.policy import policies  # noqa: E402
 from app.db import models as m  # noqa: E402
 from app.db.session import session_factory  # noqa: E402
 
@@ -27,6 +28,8 @@ def seed(db) -> None:
         for r in roles:
             db.execute(insert(m.UserRole).values(user_id=uid, role=r).on_conflict_do_nothing())
     register_active_key(db)
+    if not db.query(m.Policy).filter(m.Policy.active.is_(True)).first():
+        policies.publish(db, policies.PolicySettings(), None, version="demo-1", demo_default=True)
 
 
 if __name__ == "__main__":
