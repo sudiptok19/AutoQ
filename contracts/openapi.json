@@ -35,6 +35,42 @@
         "title": "Body_add_heat_api_v1_heats_post",
         "type": "object"
       },
+      "Body_inspect_api_v1_inspections_post": {
+        "properties": {
+          "evidence_source": {
+            "default": "LIVE_CAPTURE",
+            "title": "Evidence Source",
+            "type": "string"
+          },
+          "image": {
+            "format": "binary",
+            "title": "Image",
+            "type": "string"
+          },
+          "station_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Station Id"
+          },
+          "unit_id": {
+            "minLength": 1,
+            "title": "Unit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit_id",
+          "image"
+        ],
+        "title": "Body_inspect_api_v1_inspections_post",
+        "type": "object"
+      },
       "Containment": {
         "properties": {
           "first_n": {
@@ -150,6 +186,19 @@
           }
         },
         "title": "Inspection",
+        "type": "object"
+      },
+      "IssueIn": {
+        "properties": {
+          "unit_id": {
+            "title": "Unit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit_id"
+        ],
+        "title": "IssueIn",
         "type": "object"
       },
       "LineIn": {
@@ -363,6 +412,105 @@
         "title": "PolicyIn",
         "type": "object"
       },
+      "PublicKey": {
+        "properties": {
+          "alg": {
+            "const": "Ed25519",
+            "title": "Alg",
+            "type": "string"
+          },
+          "kid": {
+            "title": "Kid",
+            "type": "string"
+          },
+          "not_after": {
+            "title": "Not After",
+            "type": "integer"
+          },
+          "not_before": {
+            "title": "Not Before",
+            "type": "integer"
+          },
+          "public_key": {
+            "title": "Public Key",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "RETIRED",
+              "REVOKED"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kid",
+          "alg",
+          "public_key",
+          "status",
+          "not_before",
+          "not_after"
+        ],
+        "title": "PublicKey",
+        "type": "object"
+      },
+      "PublicKeys": {
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/PublicKey"
+            },
+            "title": "Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "PublicKeys",
+        "type": "object"
+      },
+      "ReasonIn": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ReasonIn",
+        "type": "object"
+      },
+      "ReviewIn": {
+        "properties": {
+          "action": {
+            "enum": [
+              "REINSPECT",
+              "REJECT"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "title": "ReviewIn",
+        "type": "object"
+      },
       "Sampling": {
         "properties": {
           "sample_size": {
@@ -451,6 +599,21 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VerifyIn": {
+        "properties": {
+          "token": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "VerifyIn",
+        "type": "object"
       }
     }
   },
@@ -460,6 +623,178 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/alerts": {
+      "get": {
+        "operationId": "list_alerts_api_v1_alerts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(OPEN|ACK|RESOLVED)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Alerts Api V1 Alerts Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Alerts",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/v1/alerts/{alert_id}/ack": {
+      "post": {
+        "operationId": "ack_api_v1_alerts__alert_id__ack_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "title": "Alert Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReasonIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ack Api V1 Alerts  Alert Id  Ack Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ack",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/v1/alerts/{alert_id}/resolve": {
+      "post": {
+        "operationId": "resolve_api_v1_alerts__alert_id__resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "title": "Alert Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReasonIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Api V1 Alerts  Alert Id  Resolve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
     "/api/v1/audit": {
       "get": {
         "operationId": "list_audit_api_v1_audit_get",
@@ -818,6 +1153,204 @@
         ]
       }
     },
+    "/api/v1/inspections": {
+      "get": {
+        "operationId": "list_inspections_api_v1_inspections_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "unit_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Unit Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lot_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lot Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Inspections Api V1 Inspections Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Inspections",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      },
+      "post": {
+        "operationId": "inspect_api_v1_inspections_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_inspect_api_v1_inspections_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Inspect Api V1 Inspections Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      }
+    },
+    "/api/v1/inspections/{inspection_id}/review": {
+      "post": {
+        "operationId": "review_api_v1_inspections__inspection_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "inspection_id",
+            "required": true,
+            "schema": {
+              "title": "Inspection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Api V1 Inspections  Inspection Id  Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      }
+    },
+    "/api/v1/keys": {
+      "get": {
+        "operationId": "list_keys_api_v1_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicKeys"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Keys",
+        "tags": [
+          "passport-crypto"
+        ]
+      }
+    },
     "/api/v1/lines": {
       "get": {
         "operationId": "lines_api_v1_lines_get",
@@ -1125,6 +1658,95 @@
         ]
       }
     },
+    "/api/v1/passports/issue": {
+      "post": {
+        "operationId": "issue_api_v1_passports_issue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Issue Api V1 Passports Issue Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      }
+    },
+    "/api/v1/passports/{passport_id}": {
+      "get": {
+        "operationId": "get_passport_api_v1_passports__passport_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "passport_id",
+            "required": true,
+            "schema": {
+              "title": "Passport Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Passport Api V1 Passports  Passport Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Passport",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      }
+    },
     "/api/v1/policies": {
       "get": {
         "operationId": "get_policy_api_v1_policies_get",
@@ -1180,6 +1802,109 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}/pdf": {
+      "get": {
+        "operationId": "download_pdf_api_v1_reports__report_id__pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Pdf",
+        "tags": [
+          "scar-pdf"
+        ]
+      }
+    },
+    "/api/v1/spc/series": {
+      "get": {
+        "operationId": "get_series_api_v1_spc_series_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "part_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Part Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "line_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Line Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "method_version",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Method Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Series Api V1 Spc Series Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Series",
+        "tags": [
+          "spc"
         ]
       }
     },
@@ -1327,6 +2052,119 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/units/{key}/detail": {
+      "get": {
+        "operationId": "unit_detail_api_v1_units__key__detail_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Unit Detail Api V1 Units  Key  Detail Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unit Detail",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      }
+    },
+    "/api/v1/verify": {
+      "post": {
+        "operationId": "verify_api_v1_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Verify Api V1 Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify",
+        "tags": [
+          "inspection",
+          "passports"
+        ]
+      }
+    },
+    "/api/v1/ws/tickets": {
+      "post": {
+        "description": "Bearer \u2192 short-lived single-use ticket, so the JWT never travels in a WebSocket URL.",
+        "operationId": "ticket_api_v1_ws_tickets_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ticket Api V1 Ws Tickets Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ticket",
+        "tags": [
+          "alerts"
         ]
       }
     }
