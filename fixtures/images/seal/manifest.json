@@ -1,0 +1,51 @@
+{
+  "capture_setup": "Handheld, top-down photos of the patterned seal across the seam of cardboard box PKG-01. The framing height differed from the inspection captures.",
+  "images": [
+    {
+      "file": "enroll.jpg",
+      "label": "enroll",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured (handheld, top-down)",
+      "session_id": "not recorded",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "intact_recapture.jpg",
+      "label": "intact_recapture",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured (handheld, top-down)",
+      "session_id": "not recorded",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "torn.jpg",
+      "label": "torn",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured (handheld, top-down)",
+      "session_id": "not recorded",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "repositioned.jpg",
+      "label": "repositioned",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured (handheld, top-down)",
+      "session_id": "not recorded",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "bad_light.jpg",
+      "label": "bad_light",
+      "device": "Vivo X200t",
+      "lighting": "Dim room with manually reduced exposure",
+      "distance": "Unmeasured (handheld, top-down)",
+      "session_id": "not recorded",
+      "evidence_source": "PRERECORDED_EVAL"
+    }
+  ],
+  "thresholds": {}
+}
