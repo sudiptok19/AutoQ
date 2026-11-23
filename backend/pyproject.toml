@@ -21,6 +21,7 @@ dependencies = [
   "scikit-image>=0.24",
   "reportlab>=4.2",
   "jsonschema>=4.23",
+  "pillow>=11.0",  # seal_vision (Astra A2) EXIF orientation
 ]
 
 [dependency-groups]

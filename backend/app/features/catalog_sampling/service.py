@@ -210,3 +210,68 @@ def freeze_and_sample(db: Session, p: Principal, lot_id: str) -> dict:
 
 def _basis(db: Session, lot: m.Lot) -> str:
     return "INDIVIDUAL_100PCT" if db.get(m.Part, lot.part_id).is_a_part else "SAMPLED_LOT"
+
+
+# ── inspection profiles & calibration (persistence is Opus; vision science is Astra's A1) ──
+def profile_row_view(db: Session, p: m.InspectionProfile) -> dict:
+    return {"id": p.id, "part_id": p.part_id, "station_id": p.station_id, "method_version": p.method_version, "calibration_version": p.calibration_version,
+            "calibrated": p.calibrated, "reference_sha256": p.reference_sha256, "reference_url": f"/api/v1/evidence/{p.reference_sha256}" if p.reference_sha256 else None,
+            "thresholds": p.thresholds, "active": p.active, "created_at": _iso(p.created_at)}
+
+
+def create_profile(db: Session, p: Principal, part_id: str, station_id: str) -> dict:
+    from app.features.component_vision.service import METHOD_VERSION
+    part = _get(db, m.Part, part_id, "part")
+    if not db.scalars(select(m.Line).where(m.Line.station_id == station_id)).first():
+        raise ApiError(404, "STATION_NOT_FOUND", "No line uses that station")
+    if db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.part_id == part_id, m.InspectionProfile.station_id == station_id,
+                                                   m.InspectionProfile.active.is_(True))).first():
+        raise ApiError(409, "PROFILE_EXISTS", "An active profile already exists for this part and station; upload a new golden to revise it")
+    prof = m.InspectionProfile(id=new_id("prof"), part_id=part_id, station_id=station_id, method_version=METHOD_VERSION, calibration_version=1,
+                               calibrated=False, thresholds={}, active=True)
+    db.add(prof); db.flush()
+    part.inspection_profile_id = prof.id
+    audit.append(db, p.username, "PROFILE_CREATED", "inspection_profile", prof.id, data={"part": part.part_number, "station": station_id, "method": METHOD_VERSION})
+    return profile_row_view(db, prof)
+
+
+def calibrate_profile(db: Session, p: Principal, profile_id: str, hold: float, reject: float, evaluation: bytes, reason: str) -> dict:
+    """Calibration is a NEW immutable revision citing a stored held-out evaluation report; inspections keep pointing at
+    the revision they used."""
+    import json as _json
+
+    from app.features.component_vision.service import METHOD_VERSION, validate_reference
+    old = db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.id == profile_id).with_for_update()).first()
+    if not old:
+        raise ApiError(404, "PROFILE_NOT_FOUND", "Inspection profile not found")
+    if not old.active:
+        raise ApiError(409, "PROFILE_SUPERSEDED", "Calibrate the active revision")
+    if not old.reference_sha256:
+        raise ApiError(409, "REFERENCE_MISSING", "Upload a golden reference before calibrating")
+    if not 0 < hold < reject <= 1:
+        raise ApiError(422, "THRESHOLDS_INVALID", "Require 0 < hold < reject <= 1")
+    try:
+        report = _json.loads(evaluation)
+        counts = {k: report[k] for k in ("samples", "false_accepts", "false_rejects", "unverifiable")}
+        if not all(type(v) is int and v >= 0 for v in counts.values()) or counts["samples"] < 1:
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        raise ApiError(422, "EVALUATION_INVALID", "Evaluation report must be JSON with integer samples, false_accepts, false_rejects, unverifiable")
+    if report.get("method_version", METHOD_VERSION) != METHOD_VERSION:
+        raise ApiError(409, "EVALUATION_METHOD_MISMATCH", f"Evaluation was for {report.get('method_version')}, profile uses {METHOD_VERSION}")
+    from app.core.storage import get_evidence
+    validate_reference(get_evidence(db, old.reference_sha256)[0], old.thresholds or {})
+    eval_sha = put_evidence(db, evaluation, "application/json", "PRERECORDED_EVAL", p.id)
+    old.active = False
+    db.flush()
+    new = m.InspectionProfile(id=new_id("prof"), part_id=old.part_id, station_id=old.station_id, method_version=old.method_version,
+                              calibration_version=old.calibration_version + 1, calibrated=True, reference_sha256=old.reference_sha256,
+                              thresholds={**(old.thresholds or {}), "hold": hold, "reject": reject,
+                                          "calibration": {"evaluation_sha256": eval_sha, **counts, "by": p.username, "reason": reason}},
+                              active=True)
+    db.add(new); db.flush()
+    part = db.get(m.Part, old.part_id)
+    part.inspection_profile_id = new.id
+    audit.append(db, p.username, "PROFILE_CALIBRATED", "inspection_profile", new.id, reason,
+                 data={"previous": old.id, "hold": hold, "reject": reject, "evaluation": eval_sha, **counts})
+    return profile_row_view(db, new)

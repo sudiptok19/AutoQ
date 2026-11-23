@@ -1,6 +1,29 @@
 {
   "components": {
     "schemas": {
+      "ApproveIn": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "review_evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Review Evidence Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ApproveIn",
+        "type": "object"
+      },
       "Body_add_heat_api_v1_heats_post": {
         "properties": {
           "certificate": {
@@ -33,6 +56,41 @@
           "certificate"
         ],
         "title": "Body_add_heat_api_v1_heats_post",
+        "type": "object"
+      },
+      "Body_calibrate_api_v1_inspection_profiles__profile_id__calibrate_post": {
+        "properties": {
+          "evaluation": {
+            "format": "binary",
+            "title": "Evaluation",
+            "type": "string"
+          },
+          "hold": {
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Hold",
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "reject": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "Reject",
+            "type": "number"
+          }
+        },
+        "required": [
+          "hold",
+          "reject",
+          "reason",
+          "evaluation"
+        ],
+        "title": "Body_calibrate_api_v1_inspection_profiles__profile_id__calibrate_post",
         "type": "object"
       },
       "Body_inspect_api_v1_inspections_post": {
@@ -135,6 +193,20 @@
         "title": "Body_seal_check_api_v1_packages__package_id__seal_checks_post",
         "type": "object"
       },
+      "Body_upload_golden_api_v1_inspection_profiles__profile_id__golden_post": {
+        "properties": {
+          "image": {
+            "format": "binary",
+            "title": "Image",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "title": "Body_upload_golden_api_v1_inspection_profiles__profile_id__golden_post",
+        "type": "object"
+      },
       "ClearIn": {
         "properties": {
           "reason": {
@@ -185,6 +257,18 @@
           }
         },
         "title": "Containment",
+        "type": "object"
+      },
+      "CreateIn": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "CreateIn",
         "type": "object"
       },
       "CustomerIn": {
@@ -664,6 +748,24 @@
         "title": "PolicyIn",
         "type": "object"
       },
+      "ProfileIn": {
+        "properties": {
+          "part_id": {
+            "title": "Part Id",
+            "type": "string"
+          },
+          "station_id": {
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part_id",
+          "station_id"
+        ],
+        "title": "ProfileIn",
+        "type": "object"
+      },
       "PublicKey": {
         "properties": {
           "alg": {
@@ -832,6 +934,31 @@
           "dock"
         ],
         "title": "ShipmentIn",
+        "type": "object"
+      },
+      "Source": {
+        "properties": {
+          "id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "RECALL",
+              "FOUR_M",
+              "ALERT"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "Source",
         "type": "object"
       },
       "SupplierIn": {
@@ -1732,6 +1859,213 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/inspection-profiles": {
+      "get": {
+        "operationId": "list_profiles_api_v1_inspection_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Profiles Api V1 Inspection Profiles Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Profiles",
+        "tags": [
+          "component-vision"
+        ]
+      },
+      "post": {
+        "operationId": "add_profile_api_v1_inspection_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Profile",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/inspection-profiles/{profile_id}": {
+      "get": {
+        "operationId": "get_profile_api_v1_inspection_profiles__profile_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Profile",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/inspection-profiles/{profile_id}/calibrate": {
+      "post": {
+        "operationId": "calibrate_api_v1_inspection_profiles__profile_id__calibrate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_calibrate_api_v1_inspection_profiles__profile_id__calibrate_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Calibrate",
+        "tags": [
+          "catalog",
+          "lots"
+        ]
+      }
+    },
+    "/api/v1/inspection-profiles/{profile_id}/golden": {
+      "post": {
+        "operationId": "upload_golden_api_v1_inspection_profiles__profile_id__golden_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_golden_api_v1_inspection_profiles__profile_id__golden_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upload Golden Api V1 Inspection Profiles  Profile Id  Golden Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Golden",
+        "tags": [
+          "component-vision"
         ]
       }
     },
@@ -2741,7 +3075,6 @@
     },
     "/api/v1/packages/{package_id}/seal-checks": {
       "post": {
-        "description": "INTERIM route with the same contract as Astra's A2 router; main.py mounts A2's instead once it exists.",
         "operationId": "seal_check_api_v1_packages__package_id__seal_checks_post",
         "parameters": [
           {
@@ -2790,7 +3123,7 @@
         },
         "summary": "Seal Check",
         "tags": [
-          "seal-vision (interim)"
+          "seal-vision"
         ]
       }
     },
@@ -2996,6 +3329,170 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/reports": {
+      "get": {
+        "operationId": "reports_api_v1_reports_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reports Api V1 Reports Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reports",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/reports/8d": {
+      "post": {
+        "operationId": "create_api_v1_reports_8d_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Api V1 Reports 8D Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}": {
+      "get": {
+        "operationId": "report_api_v1_reports__report_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Report Api V1 Reports  Report Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/v1/reports/{report_id}/approve": {
+      "post": {
+        "operationId": "approve_api_v1_reports__report_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "report_id",
+            "required": true,
+            "schema": {
+              "title": "Report Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Api V1 Reports  Report Id  Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve",
+        "tags": [
+          "reports"
         ]
       }
     },
