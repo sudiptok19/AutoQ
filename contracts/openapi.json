@@ -71,6 +71,70 @@
         "title": "Body_inspect_api_v1_inspections_post",
         "type": "object"
       },
+      "Body_re_enroll_api_v1_packages__key__re_enroll_post": {
+        "properties": {
+          "evidence_source": {
+            "default": "LIVE_CAPTURE",
+            "title": "Evidence Source",
+            "type": "string"
+          },
+          "image": {
+            "format": "binary",
+            "title": "Image",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "reason"
+        ],
+        "title": "Body_re_enroll_api_v1_packages__key__re_enroll_post",
+        "type": "object"
+      },
+      "Body_seal_api_v1_packages__key__seal_post": {
+        "properties": {
+          "evidence_source": {
+            "default": "LIVE_CAPTURE",
+            "title": "Evidence Source",
+            "type": "string"
+          },
+          "image": {
+            "format": "binary",
+            "title": "Image",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "title": "Body_seal_api_v1_packages__key__seal_post",
+        "type": "object"
+      },
+      "Body_seal_check_api_v1_packages__package_id__seal_checks_post": {
+        "properties": {
+          "evidence_source": {
+            "default": "LIVE_CAPTURE",
+            "title": "Evidence Source",
+            "type": "string"
+          },
+          "image": {
+            "format": "binary",
+            "title": "Image",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "title": "Body_seal_check_api_v1_packages__package_id__seal_checks_post",
+        "type": "object"
+      },
       "ClearIn": {
         "properties": {
           "reason": {
@@ -271,6 +335,35 @@
         "title": "IssueIn",
         "type": "object"
       },
+      "ItemIn": {
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "unit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Id"
+          }
+        },
+        "title": "ItemIn",
+        "type": "object"
+      },
       "LineIn": {
         "properties": {
           "name": {
@@ -356,6 +449,59 @@
           "planned_qty"
         ],
         "title": "LotIn",
+        "type": "object"
+      },
+      "OrderIn": {
+        "properties": {
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "destination": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Destination",
+            "type": "string"
+          },
+          "order_no": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._\\-]+$",
+            "title": "Order No",
+            "type": "string"
+          },
+          "part_id": {
+            "title": "Part Id",
+            "type": "string"
+          },
+          "qty_units": {
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Qty Units",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order_no",
+          "customer_id",
+          "part_id",
+          "qty_units",
+          "destination"
+        ],
+        "title": "OrderIn",
+        "type": "object"
+      },
+      "PackageIn": {
+        "properties": {
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_id"
+        ],
+        "title": "PackageIn",
         "type": "object"
       },
       "PartIn": {
@@ -542,21 +688,6 @@
         "title": "PublicKeys",
         "type": "object"
       },
-      "ReasonIn": {
-        "properties": {
-          "reason": {
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Reason",
-            "type": "string"
-          }
-        },
-        "required": [
-          "reason"
-        ],
-        "title": "ReasonIn",
-        "type": "object"
-      },
       "ReviewIn": {
         "properties": {
           "action": {
@@ -684,6 +815,21 @@
         ],
         "title": "VerifyIn",
         "type": "object"
+      },
+      "app__features__alerts__router__ReasonIn": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "ReasonIn",
+        "type": "object"
       }
     }
   },
@@ -775,7 +921,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReasonIn"
+                "$ref": "#/components/schemas/app__features__alerts__router__ReasonIn"
               }
             }
           },
@@ -829,7 +975,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReasonIn"
+                "$ref": "#/components/schemas/app__features__alerts__router__ReasonIn"
               }
             }
           },
@@ -1924,6 +2070,618 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/orders": {
+      "get": {
+        "operationId": "orders_api_v1_orders_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Orders Api V1 Orders Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Orders",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      },
+      "post": {
+        "operationId": "add_order_api_v1_orders_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Add Order Api V1 Orders Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Order",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_id}": {
+      "get": {
+        "operationId": "order_api_v1_orders__order_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Order Api V1 Orders  Order Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Order",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages": {
+      "get": {
+        "operationId": "packages_api_v1_packages_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "order_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Order Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Packages Api V1 Packages Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Packages",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      },
+      "post": {
+        "operationId": "add_package_api_v1_packages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Add Package Api V1 Packages Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Package",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{key}": {
+      "get": {
+        "operationId": "package_api_v1_packages__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Package Api V1 Packages  Key  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Package",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{key}/items": {
+      "post": {
+        "operationId": "add_item_api_v1_packages__key__items_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Add Item Api V1 Packages  Key  Items Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Item",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{key}/items/{unit_id}": {
+      "delete": {
+        "operationId": "remove_item_api_v1_packages__key__items__unit_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "title": "Unit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reason"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Remove Item Api V1 Packages  Key  Items  Unit Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Item",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{key}/re-enroll": {
+      "post": {
+        "operationId": "re_enroll_api_v1_packages__key__re_enroll_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_re_enroll_api_v1_packages__key__re_enroll_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Re Enroll Api V1 Packages  Key  Re Enroll Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Re Enroll",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{key}/seal": {
+      "post": {
+        "operationId": "seal_api_v1_packages__key__seal_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_seal_api_v1_packages__key__seal_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Seal Api V1 Packages  Key  Seal Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Seal",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{key}/unpack": {
+      "post": {
+        "operationId": "unpack_api_v1_packages__key__unpack_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app__features__alerts__router__ReasonIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Unpack Api V1 Packages  Key  Unpack Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unpack",
+        "tags": [
+          "orders",
+          "packaging"
+        ]
+      }
+    },
+    "/api/v1/packages/{package_id}/seal-checks": {
+      "post": {
+        "description": "INTERIM route with the same contract as Astra's A2 router; main.py mounts A2's instead once it exists.",
+        "operationId": "seal_check_api_v1_packages__package_id__seal_checks_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "package_id",
+            "required": true,
+            "schema": {
+              "title": "Package Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_seal_check_api_v1_packages__package_id__seal_checks_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Seal Check Api V1 Packages  Package Id  Seal Checks Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Seal Check",
+        "tags": [
+          "seal-vision (interim)"
         ]
       }
     },
