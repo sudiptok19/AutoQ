@@ -54,6 +54,8 @@ def issuance_plan(db: Session, unit: m.Unit) -> tuple[str, list[m.Inspection]] |
         blockers.append({"code": "LOT_NOT_FROZEN", "message": "Freeze the lot before release"})
     for run in open_runs(db, unit):
         blockers.append({"code": "CONTAINMENT_ACTIVE", "message": f"4M containment run {run.id} is {run.status}; issuance blocked until QM clearance", "ref": run.id})
+    for h in eligibility.active_holds(db, unit):
+        blockers.append({"code": "QUARANTINED", "message": f"Recall hold on {h.entity_type.lower()} {h.entity_id}; issuance and activation blocked", "ref": h.recall_id})
     if unit.quality_status in ("HOLD", "REJECT"):
         blockers.append({"code": f"UNIT_{unit.quality_status}", "message": f"Unit's own latest result is {unit.quality_status}"})
     if blockers:
