@@ -95,10 +95,13 @@ def issue(db: Session, unit: m.Unit, actor: str) -> tuple[m.Passport | None, lis
         return None, plan
     basis, auth = plan
     current = eligibility.current_passport(db, unit)
-    if current and current.inspection_basis == "INDIVIDUAL_100PCT" and current.four_m_tagged == bool(unit.four_m_tagged):
-        return current, []  # already individually certified with the same 4M tag; retries never re-mint
-    if current and basis == "SAMPLED_LOT":
-        return current, []  # never re-mint or downgrade on sample basis
+    if current and ((current.inspection_basis == "INDIVIDUAL_100PCT" and current.four_m_tagged == bool(unit.four_m_tagged)) or basis == "SAMPLED_LOT"):
+        # Already certified (retries never re-mint; never downgrade to sample basis). The plan passed, so no
+        # containment run is open any more: a passport held for 4M becomes ACTIVE again.
+        if current.status == "HELD":
+            current.status = "ACTIVE"
+            db.flush()
+        return current, []
     pid = new_id("pp")
     token, payload, kid = _sign_pp(db, unit, basis, auth, pid)
     if current:

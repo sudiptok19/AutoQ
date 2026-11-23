@@ -133,7 +133,8 @@ def create_lot(db: Session, p: Principal, lot_code: str, part_id: str, line_id: 
 def serialize_units(db: Session, p: Principal, lot_id: str, count: int) -> list[dict]:
     if not 1 <= count <= MAX_UNITS_PER_CALL:
         raise ApiError(422, "VALIDATION", f"count must be 1..{MAX_UNITS_PER_CALL}")
-    [lot] = lock_set(db).lock(m.Lot, [lot_id]) or [None]
+    locks = lock_set(db)
+    [lot] = locks.lock(m.Lot, [lot_id]) or [None]
     if lot is None:
         raise ApiError(404, "LOT_NOT_FOUND", "Lot not found")
     if lot.frozen_at:
@@ -145,7 +146,9 @@ def serialize_units(db: Session, p: Principal, lot_id: str, count: int) -> list[
     units = [m.Unit(id=new_id("unit"), serial=f"{lot.lot_code}-{seq:04d}", lot_id=lot.id, part_id=lot.part_id, production_seq=seq,
                     requires_individual_inspection=part.is_a_part) for seq in range(start + 1, start + count + 1)]
     db.add_all(units); db.flush()
-    audit.append(db, p.username, "UNITS_SERIALIZED", "lot", lot.id, data={"from_seq": start + 1, "to_seq": start + count})
+    from app.features.containment.service import enroll_new_production
+    runs = enroll_new_production(db, locks, lot, units)
+    audit.append(db, p.username, "UNITS_SERIALIZED", "lot", lot.id, data={"from_seq": start + 1, "to_seq": start + count, "containment_runs": runs})
     return [unit_view(db, u) for u in units]
 
 
