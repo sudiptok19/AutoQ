@@ -1,0 +1,28 @@
+{
+	admin off
+	auto_https off
+	# IP clients can omit SNI, and Docker sees its own local network address.
+	default_sni {$AUTOQ_TLS_DEFAULT_NAME:localhost}
+}
+
+http:// {
+	redir https://{host}{uri} 308
+}
+
+https:// {
+	tls /certs/tls.crt /certs/tls.key
+
+	@backend path /api/* /ws/* /openapi.json
+	handle @backend {
+		reverse_proxy {$AUTOQ_BACKEND_UPSTREAM:host.docker.internal:8010}
+	}
+
+	handle {
+		reverse_proxy {$AUTOQ_FRONTEND_UPSTREAM:host.docker.internal:5173}
+	}
+
+	handle_errors 502 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "AutoQ gateway could not reach its upstream." 502
+	}
+}

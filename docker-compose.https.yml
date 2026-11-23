@@ -1,0 +1,31 @@
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      AUTOQ_BACKEND_UPSTREAM: "${AUTOQ_BACKEND_UPSTREAM:-host.docker.internal:8010}"
+      AUTOQ_FRONTEND_UPSTREAM: "${AUTOQ_FRONTEND_UPSTREAM:-host.docker.internal:5173}"
+      AUTOQ_TLS_DEFAULT_NAME: "${AUTOQ_TLS_DEFAULT_NAME:-localhost}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - type: bind
+        source: ./Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${AUTOQ_CERT_DIR:-${HOME:-${USERPROFILE}}/.autoq-certs}/tls.crt"
+        target: /certs/tls.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${AUTOQ_CERT_DIR:-${HOME:-${USERPROFILE}}/.autoq-certs}/tls.key"
+        target: /certs/tls.key
+        read_only: true
+        bind:
+          create_host_path: false
