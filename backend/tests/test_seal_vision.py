@@ -1,7 +1,9 @@
-"""Seal comparison tests using only SYNTHETIC_TEST JPEG and PNG captures."""
+"""Seal comparison and physical evaluation reporting."""
 
+import json
 from dataclasses import replace
 from io import BytesIO
+from shutil import copyfile
 
 import cv2
 import numpy as np
@@ -12,10 +14,12 @@ from PIL import Image
 
 from app.core import errors
 from app.core.auth import Principal, current_principal
+from app.core.errors import ApiError
 from app.db.session import get_db
 from app.features.seal_vision import service
 from app.features.seal_vision.router import router
 from app.ports import SealContext, SealProfile, ports
+from scripts.evaluate_vision import ROOT, evaluate_set, seal_method
 from tests.seal_fixtures import render_seal
 
 pytestmark = pytest.mark.nodb
@@ -61,6 +65,33 @@ def test_registered_capture(reference, kind, seed, expected):
     assert evidence.aligned_png.startswith(b"\x89PNG") and evidence.diff_png.startswith(b"\x89PNG")
     if kind == "torn":
         assert evidence.metrics["min_region_ssim"] < evidence.metrics["thresholds"]["regional_suspicious_ssim"]
+
+
+def test_physical_seal_report_records_unadmitted_enrollment(tmp_path):
+    source = ROOT / "fixtures" / "images" / "seal" / "manifest.json"
+    fixed_files = {"enroll.jpg", "intact_recapture.jpg", "torn.jpg", "repositioned.jpg", "bad_light.jpg"}
+    images = [row for row in json.loads(source.read_text(encoding="utf-8"))["images"] if row["file"] in fixed_files]
+    for row in images:
+        copyfile(source.parent / row["file"], tmp_path / row["file"])
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"images": images}), encoding="utf-8")
+    report = evaluate_set("seal", manifest, tmp_path / "report.json")
+
+    assert report["comparison_status"] == "BLOCKED_REFERENCE"
+    reference = report["reference"]
+    assert reference["input_metadata"]["declared_pixels"] == 8192 * 6144
+    assert reference["admission"]["error"]["code"] == "INVALID_IMAGE"
+    assert report["totals"]["n"] == report["totals"]["not_evaluated"] == len(fixed_files) - 1
+    assert report["totals"]["unverifiable"] == report["totals"]["false_accepts"] == 0
+    for result in report["results"]:
+        assert result["outcome"] == "NOT_EVALUATED" and result["score"] is None
+        assert result["input_metadata"]["declared_pixels"] > report["input_limits"]["max_pixels"]
+        assert result["standalone_assessment"]["check"] == "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT"
+        assert result["standalone_assessment"]["error"]["code"] == "INVALID_IMAGE"
+
+    with pytest.raises(ApiError) as caught:
+        seal_method((manifest.parent / reference["file"]).read_bytes(), {"min_inliers": 0})
+    assert caught.value.code == "SEAL_PROFILE_INVALID"
 
 
 def _moved_tape() -> tuple[bytes, bytes]:

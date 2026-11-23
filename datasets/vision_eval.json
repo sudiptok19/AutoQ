@@ -1,0 +1,842 @@
+{
+  "report_version": 2,
+  "evidence_source": "PRERECORDED_EVAL",
+  "definitions": {
+    "n": "Number of probe captures. The reference is excluded.",
+    "accepted": "Inspection difference below hold, or a seal result of INTACT.",
+    "flagged": "Inspection difference at or above hold, or a seal result of SUSPICIOUS.",
+    "unverifiable": "No decision due to capture quality, registration, or ambiguous seal similarity.",
+    "not_evaluated": "Comparison skipped because the reference could not be admitted. Any standalone assessment applies only to the individual image.",
+    "false_accepts": "Accepted probes labelled defect, blurry, glare, misaligned, torn, repositioned, or bad_light.",
+    "false_rejects": "Flagged probes labelled good or intact_recapture. Unverifiable probes are counted separately."
+  },
+  "input_metadata_definition": "Byte lengths and JPEG marker sequences are read directly from the original files. Declared width and height are read from the image header without decoding pixels or applying orientation.",
+  "inspection": {
+    "method_version": "gd-0.3",
+    "score_name": "raw_score",
+    "thresholds": {
+      "min_w": 320,
+      "min_h": 240,
+      "blur_min": 80.0,
+      "glare_max": 0.12,
+      "min_inliers": 24,
+      "min_inlier_ratio": 0.55,
+      "min_overlap": 0.82,
+      "min_coverage": 0.12,
+      "hold": 0.45,
+      "reject": 0.7,
+      "roi": [
+        0,
+        0,
+        1,
+        1
+      ]
+    },
+    "threshold_status": "PROVISIONAL",
+    "comparison_status": "BLOCKED_REFERENCE",
+    "input_limits": {
+      "max_bytes": 10485760,
+      "max_pixels": 24000000,
+      "max_side": 8192
+    },
+    "reference": {
+      "file": "golden_01.jpg",
+      "label": "golden",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-1",
+      "sha256": "3cdcd82e8d4eadfcb46c50d0848aab0442cc91c3bf5a08317a5caa852d941706",
+      "evidence_source": "PRERECORDED_EVAL",
+      "input_metadata": {
+        "size_bytes": 2078392,
+        "declared_width": 3840,
+        "declared_height": 3280,
+        "declared_pixels": 12595200,
+        "jpeg_bytes_after_last_eoi_sequence": 4056
+      },
+      "admission": {
+        "check": "GOLDEN_ADMISSION",
+        "passed": false,
+        "reasons": [
+          "INVALID_IMAGE"
+        ],
+        "error": {
+          "code": "INVALID_IMAGE",
+          "message": "JPEG is missing its end-of-image marker",
+          "status": 422,
+          "details": {
+            "component": "component_vision",
+            "remediation": "Capture a new JPEG or PNG within the size limit."
+          }
+        }
+      }
+    },
+    "manifest_sha256": "cbc4c29f702a96572a72dc08ba0c48b20b999a0d3a46454422097fac8c63a4bf",
+    "conditions": {
+      "good": {
+        "n": 3,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 3,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "defect": {
+        "n": 3,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 3,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "blurry": {
+        "n": 1,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 1,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "glare": {
+        "n": 2,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 2,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "misaligned": {
+        "n": 2,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 2,
+        "false_accepts": 0,
+        "false_rejects": 0
+      }
+    },
+    "totals": {
+      "n": 11,
+      "accepted": 0,
+      "flagged": 0,
+      "unverifiable": 0,
+      "not_evaluated": 11,
+      "false_accepts": 0,
+      "false_rejects": 0
+    },
+    "results": [
+      {
+        "file": "good_01.jpg",
+        "label": "good",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "857e56aad666b8bb92528b89e6b627aa858a73e0cf2504272fe42ed68fdb3979",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 2949609,
+          "declared_width": 4400,
+          "declared_height": 4556,
+          "declared_pixels": 20046400,
+          "jpeg_bytes_after_last_eoi_sequence": 3953
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "good_02.jpg",
+        "label": "good",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "d724641bb5f956d1314bea5756561df00d4aa6f980452ee53868ebeccdf355a3",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 1992650,
+          "declared_width": 3460,
+          "declared_height": 3452,
+          "declared_pixels": 11943920,
+          "jpeg_bytes_after_last_eoi_sequence": 3948
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "good_03.jpg",
+        "label": "good",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "d48d021e5b5615904db569c615e0669d33476ecc2874b5da2a7839b12cea25c7",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 2223364,
+          "declared_width": 3928,
+          "declared_height": 3268,
+          "declared_pixels": 12836704,
+          "jpeg_bytes_after_last_eoi_sequence": 3952
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "defect_01.jpg",
+        "label": "defect",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "0c256a961779310dfa4a06f319d9ff99c8094669058f4d83e8f6dddb6f5ec83a",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 3116591,
+          "declared_width": 4748,
+          "declared_height": 3904,
+          "declared_pixels": 18536192,
+          "jpeg_bytes_after_last_eoi_sequence": 3946
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "defect_02.jpg",
+        "label": "defect",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "239b6f6cbe4df943b3c4cb1e46692614f566fae875d0bd2500856b210c333ce1",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 2120214,
+          "declared_width": 3684,
+          "declared_height": 3252,
+          "declared_pixels": 11980368,
+          "jpeg_bytes_after_last_eoi_sequence": 4103
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "defect_03.jpg",
+        "label": "defect",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "5ccc041ead95c810b6fa97ffdc78e2eb31927cfcd93b37547d232c10c87c6360",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 2046980,
+          "declared_width": 3880,
+          "declared_height": 3068,
+          "declared_pixels": 11903840,
+          "jpeg_bytes_after_last_eoi_sequence": 3954
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "blurry_01.jpg",
+        "label": "blurry",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "205b4ac590d71e15da6c156c6922f3316ad3a0a9ab3d0c948f423cb235c8c63c",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 326763,
+          "declared_width": 1048,
+          "declared_height": 944,
+          "declared_pixels": 989312,
+          "jpeg_bytes_after_last_eoi_sequence": 4101
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "glare_01.jpg",
+        "label": "glare",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED with direct phone flash",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "81417da474da173e28cf2300c70ed70ce036111986ac3794e24e2562f70ab029",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 4054434,
+          "declared_width": 4020,
+          "declared_height": 3816,
+          "declared_pixels": 15340320,
+          "jpeg_bytes_after_last_eoi_sequence": 3951
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "glare_02.jpg",
+        "label": "glare",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED with direct phone flash",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "6beb98f314d5751906c7660fee3973714cfad348aa35b4b00befd5d24d8f693a",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 3762125,
+          "declared_width": 3848,
+          "declared_height": 3836,
+          "declared_pixels": 14760928,
+          "jpeg_bytes_after_last_eoi_sequence": 3951
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "misaligned_01.jpg",
+        "label": "misaligned",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "45f99f74127aef055ee3a5b48d1f4c27c1029f0238375128053498eabea288e2",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 1900339,
+          "declared_width": 3660,
+          "declared_height": 3068,
+          "declared_pixels": 11228880,
+          "jpeg_bytes_after_last_eoi_sequence": 3949
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "misaligned_02.jpg",
+        "label": "misaligned",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured",
+        "session_id": "session-2",
+        "sha256": "c63fe66a0e109e2aab1587ca75164815068f90e54a3461d71ab6e6bae3b64194",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 2210318,
+          "declared_width": 4916,
+          "declared_height": 2916,
+          "declared_pixels": 14335056,
+          "jpeg_bytes_after_last_eoi_sequence": 3896
+        },
+        "standalone_assessment": {
+          "check": "INSPECTION_QUALITY_GATE",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      }
+    ]
+  },
+  "seal": {
+    "method_version": "seal-orb-ssim-0.2",
+    "score_name": "ssim",
+    "thresholds": {
+      "min_inliers": 40,
+      "intact_ssim": 0.72,
+      "suspicious_ssim": 0.6,
+      "roi": null,
+      "blur_min": 80.0,
+      "glare_max": 0.12
+    },
+    "threshold_status": "PROVISIONAL",
+    "comparison_status": "BLOCKED_REFERENCE",
+    "input_limits": {
+      "max_bytes": 10485760,
+      "max_pixels": 24000000,
+      "max_side": 8192
+    },
+    "reference": {
+      "file": "enroll.jpg",
+      "label": "enroll",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured (handheld, top-down)",
+      "session_id": "not recorded",
+      "sha256": "52934438b2772d382cd2d099d2533cc8cd0aae6497a6d06ff8a73bd1273bebc7",
+      "evidence_source": "PRERECORDED_EVAL",
+      "input_metadata": {
+        "size_bytes": 9147246,
+        "declared_width": 8192,
+        "declared_height": 6144,
+        "declared_pixels": 50331648,
+        "jpeg_bytes_after_last_eoi_sequence": 513
+      },
+      "admission": {
+        "check": "SEAL_ENROLLMENT",
+        "passed": false,
+        "reasons": [
+          "INVALID_IMAGE"
+        ],
+        "error": {
+          "code": "INVALID_IMAGE",
+          "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
+          "status": 422,
+          "details": {
+            "component": "seal_vision",
+            "image": "reference",
+            "remediation": "Capture a new JPEG or PNG seal image."
+          }
+        }
+      }
+    },
+    "manifest_sha256": "6c23d15e244673ce41517bb977fbfcae4cebc808a7010a7dae7b2ea0dea7395c",
+    "conditions": {
+      "intact_recapture": {
+        "n": 1,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 1,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "torn": {
+        "n": 1,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 1,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "repositioned": {
+        "n": 1,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 1,
+        "false_accepts": 0,
+        "false_rejects": 0
+      },
+      "bad_light": {
+        "n": 1,
+        "accepted": 0,
+        "flagged": 0,
+        "unverifiable": 0,
+        "not_evaluated": 1,
+        "false_accepts": 0,
+        "false_rejects": 0
+      }
+    },
+    "totals": {
+      "n": 4,
+      "accepted": 0,
+      "flagged": 0,
+      "unverifiable": 0,
+      "not_evaluated": 4,
+      "false_accepts": 0,
+      "false_rejects": 0
+    },
+    "results": [
+      {
+        "file": "intact_recapture.jpg",
+        "label": "intact_recapture",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured (handheld, top-down)",
+        "session_id": "not recorded",
+        "sha256": "707ec2f29ab5e3fee1a9d91c01e5dad599c4ad43f41edacd3e8950e8d94d4d91",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 8973687,
+          "declared_width": 8192,
+          "declared_height": 6144,
+          "declared_pixels": 50331648,
+          "jpeg_bytes_after_last_eoi_sequence": 513
+        },
+        "standalone_assessment": {
+          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
+            "status": 422,
+            "details": {
+              "component": "seal_vision",
+              "image": "reference",
+              "remediation": "Capture a new JPEG or PNG seal image."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "torn.jpg",
+        "label": "torn",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured (handheld, top-down)",
+        "session_id": "not recorded",
+        "sha256": "23f232c1c2645ce08334954fd6c43daa9a0e4cc177c084f0b74fc224fb163fd0",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 7660645,
+          "declared_width": 6144,
+          "declared_height": 7184,
+          "declared_pixels": 44138496,
+          "jpeg_bytes_after_last_eoi_sequence": 3922
+        },
+        "standalone_assessment": {
+          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
+            "status": 422,
+            "details": {
+              "component": "seal_vision",
+              "image": "reference",
+              "remediation": "Capture a new JPEG or PNG seal image."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "repositioned.jpg",
+        "label": "repositioned",
+        "device": "Vivo X200t",
+        "lighting": "Indoor overhead LED",
+        "distance": "Unmeasured (handheld, top-down)",
+        "session_id": "not recorded",
+        "sha256": "208455956aa92d7ebe9ae9b28851668652c7f1e3277b3dbd0693fc8a1c133027",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 9126575,
+          "declared_width": 6144,
+          "declared_height": 8192,
+          "declared_pixels": 50331648,
+          "jpeg_bytes_after_last_eoi_sequence": 513
+        },
+        "standalone_assessment": {
+          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
+            "status": 422,
+            "details": {
+              "component": "seal_vision",
+              "image": "reference",
+              "remediation": "Capture a new JPEG or PNG seal image."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      },
+      {
+        "file": "bad_light.jpg",
+        "label": "bad_light",
+        "device": "Vivo X200t",
+        "lighting": "Dim room with manually reduced exposure",
+        "distance": "Unmeasured (handheld, top-down)",
+        "session_id": "not recorded",
+        "sha256": "e4877abae81ab70ca26a31c2a664041f071b6d7c7b2204b06fa3a0e7c1500afc",
+        "evidence_source": "PRERECORDED_EVAL",
+        "input_metadata": {
+          "size_bytes": 4544620,
+          "declared_width": 7472,
+          "declared_height": 6144,
+          "declared_pixels": 45907968,
+          "jpeg_bytes_after_last_eoi_sequence": 3921
+        },
+        "standalone_assessment": {
+          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
+            "status": 422,
+            "details": {
+              "component": "seal_vision",
+              "image": "reference",
+              "remediation": "Capture a new JPEG or PNG seal image."
+            }
+          }
+        },
+        "outcome": "NOT_EVALUATED",
+        "score": null,
+        "reasons": [
+          "REFERENCE_UNUSABLE"
+        ],
+        "explanation": null,
+        "metrics": null
+      }
+    ]
+  }
+}

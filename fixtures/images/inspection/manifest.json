@@ -1,0 +1,113 @@
+{
+  "capture_setup": "Handheld top-down at 3x zoom",
+  "images": [
+    {
+      "file": "golden_01.jpg",
+      "label": "golden",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-1",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "good_01.jpg",
+      "label": "good",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "good_02.jpg",
+      "label": "good",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "good_03.jpg",
+      "label": "good",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "defect_01.jpg",
+      "label": "defect",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "defect_02.jpg",
+      "label": "defect",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "defect_03.jpg",
+      "label": "defect",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "blurry_01.jpg",
+      "label": "blurry",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "glare_01.jpg",
+      "label": "glare",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED with direct phone flash",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "glare_02.jpg",
+      "label": "glare",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED with direct phone flash",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "misaligned_01.jpg",
+      "label": "misaligned",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    },
+    {
+      "file": "misaligned_02.jpg",
+      "label": "misaligned",
+      "device": "Vivo X200t",
+      "lighting": "Indoor overhead LED",
+      "distance": "Unmeasured",
+      "session_id": "session-2",
+      "evidence_source": "PRERECORDED_EVAL"
+    }
+  ]
+}

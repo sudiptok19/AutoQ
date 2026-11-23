@@ -1,8 +1,10 @@
-"""Component evidence and profile routing with real SYNTHETIC_TEST JPEG/PNG bytes."""
+"""Component evidence, profile routing, and physical evaluation reporting."""
 
+import json
 import struct
 from dataclasses import replace
 from hashlib import sha256
+from shutil import copyfile
 from zlib import crc32
 
 import cv2
@@ -24,6 +26,7 @@ from app.features.component_vision.service import (
     validate_reference,
 )
 from app.ports import VisionProfile, ports
+from scripts.evaluate_vision import ROOT, evaluate_set, inspection_method
 
 pytestmark = pytest.mark.nodb
 
@@ -125,6 +128,32 @@ def test_missing_or_unusable_calibration(golden, profile, condition):
     assert evidence.quality_gate["passed"] is True
     assert evidence.analysis["calibrated"] is False
     assert evidence.analysis["method_version"] == METHOD_VERSION
+
+
+def test_physical_inspection_report_records_unadmitted_golden(tmp_path):
+    source = ROOT / "fixtures" / "images" / "inspection" / "manifest.json"
+    fixed_files = {"golden_01.jpg", "good_01.jpg", "defect_01.jpg", "blurry_01.jpg", "glare_01.jpg", "misaligned_01.jpg"}
+    images = [row for row in json.loads(source.read_text(encoding="utf-8"))["images"] if row["file"] in fixed_files]
+    for row in images:
+        copyfile(source.parent / row["file"], tmp_path / row["file"])
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"images": images}), encoding="utf-8")
+    report = evaluate_set("inspection", manifest, tmp_path / "report.json")
+
+    assert report["comparison_status"] == "BLOCKED_REFERENCE"
+    reference = report["reference"]
+    assert reference["sha256"] == sha256((manifest.parent / reference["file"]).read_bytes()).hexdigest()
+    assert reference["input_metadata"]["jpeg_bytes_after_last_eoi_sequence"] > 0
+    assert reference["admission"]["error"]["message"] == "JPEG is missing its end-of-image marker"
+    assert report["totals"]["n"] == report["totals"]["not_evaluated"] == len(fixed_files) - 1
+    assert report["totals"]["unverifiable"] == 0
+    for result in report["results"]:
+        assert result["evidence_source"] == "PRERECORDED_EVAL"
+        assert result["outcome"] == "NOT_EVALUATED" and result["score"] is None
+        assert result["standalone_assessment"]["error"]["code"] == "INVALID_IMAGE"
+
+    with pytest.raises(ApiError, match="Invalid inspection threshold min_inliers"):
+        inspection_method((manifest.parent / reference["file"]).read_bytes(), {"min_inliers": 0})
 
 
 def test_excessive_translation_gives_alignment_failure(part, golden, profile):
