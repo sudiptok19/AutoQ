@@ -66,9 +66,13 @@ def scan(key: str, body: ScanIn, db: Session = Depends(get_db), p: Principal = D
     return view
 
 
+class CloseIn(BaseModel):
+    unsynced_offline_events: int = Field(0, ge=0)
+
+
 @router.post("/shipments/{key}/close")
-def close(key: str, db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
-    return s.close(db, p, key)
+def close(key: str, body: CloseIn | None = None, db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
+    return s.close(db, p, key, unsynced=(body.unsynced_offline_events if body else 0))
 
 
 @router.post("/shipments/{key}/events")
