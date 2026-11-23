@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, Form, UploadFile
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -108,7 +109,7 @@ def heats(db: Session = Depends(get_db), _: Principal = Any_):
 async def add_heat(heat_code: str = Form(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9._\-]+$"), supplier_id: str = Form(), material_grade: str = Form(min_length=1, max_length=40),
                    certificate: UploadFile = File(), db: Session = Depends(get_db), p: Principal = Depends(require_roles("admin", "quality_engineer", "quality_manager"))):
     data = await certificate.read()
-    return s.create_heat(db, p, heat_code, supplier_id, material_grade, data, certificate.filename or "certificate", sniff(data) or (certificate.content_type or ""))
+    return await run_in_threadpool(s.create_heat, db, p, heat_code, supplier_id, material_grade, data, certificate.filename or "certificate", sniff(data) or (certificate.content_type or ""))
 
 
 @router.get("/lots")

@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,8 @@ async def inspect(unit_id: str = Form(min_length=1), station_id: str | None = Fo
     data = await image.read(MAX_IMAGE + 1)
     if len(data) > MAX_IMAGE:
         raise ApiError(413, "EVIDENCE_TOO_LARGE", "Image larger than 15 MB")
-    return service.inspect(db, p, unit_id, station_id, data, evidence_source)
+    # Blocking DB/CV work must never run on the event loop (a lock wait there stalls every request).
+    return await run_in_threadpool(service.inspect, db, p, unit_id, station_id, data, evidence_source)
 
 
 @router.get("/inspections")

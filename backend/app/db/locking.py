@@ -1,4 +1,4 @@
-"""Global lock hierarchy (CONTRACT §10.4): heat → lot → unit → package → order → shipment,
+"""Global lock hierarchy (CONTRACT §10.4): heat → lot → unit → containment_run → package → order → shipment,
 ascending id inside each class. Every transactional service acquires row locks ONLY through
 `lock_set`, so two transactions can never wait on each other in opposite orders."""
 from collections.abc import Iterable
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db import models as m
 
-LOCK_ORDER: list[type[m.Base]] = [m.Heat, m.Lot, m.Unit, m.Package, m.Order, m.Shipment]
+LOCK_ORDER: list[type[m.Base]] = [m.Heat, m.Lot, m.Unit, m.ContainmentRun, m.Package, m.Order, m.Shipment]
 _RANK = {cls: i for i, cls in enumerate(LOCK_ORDER)}
 
 
