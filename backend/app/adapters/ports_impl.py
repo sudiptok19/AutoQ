@@ -57,10 +57,12 @@ class PgPorts:
 
     # ── seal vision (packaging slice) ──
     def load_seal_context(self, db: Session, package_id: str, principal: Principal) -> SealContext:
-        raise ApiError(503, "ADAPTER_UNAVAILABLE", "Seal persistence arrives with the packaging slice", {"component": "ports.seal"})
+        from app.features.packaging.service import load_seal_context
+        return load_seal_context(db, package_id)
 
     def record_recheck(self, db, ctx, evidence, probe, probe_media_type, evidence_source, principal) -> dict:
-        raise ApiError(503, "ADAPTER_UNAVAILABLE", "Seal persistence arrives with the packaging slice", {"component": "ports.seal"})
+        from app.features.packaging.service import record_recheck
+        return record_recheck(db, ctx, evidence, probe, probe_media_type, evidence_source, principal)
 
     # ── spc ──
     def load_spc_inputs(self, db: Session, part_id: str, line_id: str, method_version: str, principal: Principal):

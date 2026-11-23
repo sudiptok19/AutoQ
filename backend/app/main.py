@@ -14,6 +14,7 @@ from app.features.alerts import relay
 from app.features.alerts.router import router as alerts, ws_router
 from app.features.catalog_sampling.router import router as catalog_sampling
 from app.features.containment.router import router as containment
+from app.features.packaging.router import interim_seal_router, router as packaging
 from app.features.inspection_passports.router import router as inspection_passports
 from app.features.passport_crypto.router import router as passport_crypto  # Astra A4
 from app.features.scar_pdf.router import router as scar_pdf  # Astra A5
@@ -22,6 +23,14 @@ from app.ports import register_ports
 from app.features.platform.router import router as platform
 
 API = "/api/v1"
+
+
+def _seal_router():
+    try:  # Astra's A2 seal-vision router once merged; interim (same contract) until then
+        from app.features.seal_vision.router import router as seal_vision  # type: ignore
+        return seal_vision
+    except ImportError:
+        return interim_seal_router
 
 
 @asynccontextmanager
@@ -37,7 +46,7 @@ def create_app() -> FastAPI:
     errors.install(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings().cors_list, allow_credentials=False, allow_methods=["*"], allow_headers=["*"], expose_headers=["x-request-id"])
     register_ports(PgPorts())
-    for r in (platform, auth_evidence, catalog_sampling, inspection_passports, containment, passport_crypto, spc, scar_pdf, alerts):
+    for r in (platform, auth_evidence, catalog_sampling, inspection_passports, containment, packaging, _seal_router(), passport_crypto, spc, scar_pdf, alerts):
         app.include_router(r, prefix=API)
     app.include_router(ws_router)  # /ws/events (same origin, ticket auth)
     return app
