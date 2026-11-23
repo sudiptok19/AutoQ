@@ -80,10 +80,12 @@ class PgPorts:
 
     # ── reports (report-workflow slice) ──
     def load_snapshot(self, db: Session, report_id: str, principal: Principal) -> ReportSnapshot:
-        raise ApiError(503, "ADAPTER_UNAVAILABLE", "Report snapshots arrive with the report-workflow slice", {"component": "ports.reports"})
+        from app.features.report_workflow.service import load_snapshot
+        return load_snapshot(db, report_id)
 
     def record_pdf(self, db, snapshot, pdf, principal) -> str:
-        raise ApiError(503, "ADAPTER_UNAVAILABLE", "Report snapshots arrive with the report-workflow slice", {"component": "ports.reports"})
+        from app.features.report_workflow.service import record_pdf
+        return record_pdf(db, snapshot, pdf, principal)
 
     # ── crypto ──
     def list_public_keys(self, db: Session) -> list[dict]:
