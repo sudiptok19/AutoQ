@@ -15,6 +15,7 @@ from app.core.storage import get_evidence, put_evidence, sniff
 from app.db import models as m
 from app.db.locking import lock_set
 from app.features.alerts.service import raise_alert
+from app.features.containment import service as containment
 from app.features.inspection_passports import interim_vision as vision  # swapped for Astra's A1 on merge
 from app.features.inspection_passports import passports
 from app.features.spc.service import compute_series, freeze_baseline
@@ -170,8 +171,9 @@ def inspect(db: Session, p: Principal, unit_key: str, station_id: str | None, im
     sample_after = _refresh_sample_status(db, lot)
     pp, blockers, released = None, [], 0
     newly_passed = sample_after == "PASSED" and sample_before != "PASSED"
-    # Take every row lock BEFORE any audit append (issuance audits), per the lock hierarchy.
+    # Take every row lock BEFORE any audit append (issuance audits), per the lock hierarchy: units → containment runs.
     others = locks.lock(m.Unit, list(db.scalars(select(m.Unit.id).where(m.Unit.lot_id == lot.id, m.Unit.id != unit.id)))) if newly_passed else []
+    run_changes = containment.on_verdict(db, locks, unit, insp, verdict)
     if verdict == "PASS":
         pp, blockers = passports.issue(db, unit, p.username)
     elif verdict == "REJECT":
@@ -180,6 +182,7 @@ def inspect(db: Session, p: Principal, unit_key: str, station_id: str | None, im
         got, _ = passports.issue(db, u, p.username)
         released += bool(got and got.inspection_basis == "SAMPLED_LOT")
     drift = _update_spc(db, insp, unit.part_id)
+    containment.emit_changes(db, run_changes, p.username)
     audit.append(db, p.username, "INSPECTION_RECORDED", "unit", unit.id,
                  data={"inspection": insp.id, "verdict": verdict, "score": ev.raw_score, "gate": ev.quality_gate["passed"], "policy": pol.version,
                        "evidence_source": evidence_source, "sample_status": sample_after})
@@ -187,7 +190,7 @@ def inspect(db: Session, p: Principal, unit_key: str, station_id: str | None, im
         raise_alert(db, type="SAMPLE_FAILED", severity="HIGH", entity_type="LOT", entity_id=lot.id, reason_codes=["SAMPLE_FAILED"],
                     details={"lot_code": lot.lot_code, "inspection_id": insp.id}, dedupe_key=f"sample_failed:{lot.id}")
     return view(db, insp, pp, {"issuance_blockers": blockers, "lot_sample_status": sample_after, "sampled_passports_released": released,
-                               "contained": contained, "drift_warnings": drift})
+                               "contained": contained, "drift_warnings": drift, "containment_progress": run_changes})
 
 
 def review(db: Session, p: Principal, inspection_id: str, action: str, reason: str) -> dict:
@@ -205,11 +208,14 @@ def review(db: Session, p: Principal, inspection_id: str, action: str, reason: s
     if db.scalars(select(m.InspectionReview).where(m.InspectionReview.inspection_id == insp.id)).first():
         raise ApiError(409, "ALREADY_REVIEWED", "This HOLD was already reviewed")
     db.add(m.InspectionReview(id=new_id("rev"), inspection_id=insp.id, action=action, reason=reason.strip(), reviewer_id=p.id))
+    run_changes = []
     if action == "REJECT":
         unit.quality_status = "REJECT"
         db.flush()
         _refresh_sample_status(db, lot)
+        run_changes = containment.on_verdict(db, locks, unit, None, "REJECT")
         passports.revoke(db, unit, p.username, reason)
+        containment.emit_changes(db, run_changes, p.username)
     db.flush()
     audit.append(db, p.username, f"HOLD_REVIEW_{action}", "unit", unit.id, reason, data={"inspection": insp.id})
     return view(db, insp)

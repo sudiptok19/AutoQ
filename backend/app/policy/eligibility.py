@@ -45,6 +45,8 @@ def compute(db: Session, unit: m.Unit) -> Eligibility:
     if not pp:
         revoked = db.scalars(select(m.Passport.id).where(m.Passport.unit_id == unit.id, m.Passport.status == "REVOKED")).first()
         b.append({"code": "PASSPORT_REVOKED", "message": "Passport revoked"} if revoked else {"code": "NO_PASSPORT", "message": "No quality passport issued"})
+    if pp and pp.status == "HELD":
+        b.append({"code": "PASSPORT_HELD", "message": "Passport held pending 4M recheck", "ref": pp.id})
     if unit.quality_status == "REJECT":
         b.append({"code": "UNIT_REJECTED", "message": "Unit rejected"})
     elif unit.quality_status == "HOLD":
