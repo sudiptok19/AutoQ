@@ -14,6 +14,7 @@ from app.features.alerts import relay
 from app.features.alerts.router import router as alerts, ws_router
 from app.features.catalog_sampling.router import router as catalog_sampling
 from app.features.containment.router import router as containment
+from app.features.dispatch.router import router as dispatch
 from app.features.packaging.router import interim_seal_router, router as packaging
 from app.features.inspection_passports.router import router as inspection_passports
 from app.features.passport_crypto.router import router as passport_crypto  # Astra A4
@@ -46,7 +47,7 @@ def create_app() -> FastAPI:
     errors.install(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings().cors_list, allow_credentials=False, allow_methods=["*"], allow_headers=["*"], expose_headers=["x-request-id"])
     register_ports(PgPorts())
-    for r in (platform, auth_evidence, catalog_sampling, inspection_passports, containment, packaging, _seal_router(), passport_crypto, spc, scar_pdf, alerts):
+    for r in (platform, auth_evidence, catalog_sampling, inspection_passports, containment, packaging, _seal_router(), dispatch, passport_crypto, spc, scar_pdf, alerts):
         app.include_router(r, prefix=API)
     app.include_router(ws_router)  # /ws/events (same origin, ticket auth)
     return app
