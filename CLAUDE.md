@@ -12,7 +12,7 @@ I own **all UI/UX**, plus the **database and transactional backend** of AutoQ-Tr
 - Root `docker-compose.yml`, `Makefile`, `.env.example`, `README.md`, `contracts/openapi.json`
 
 ## I never write
-Astra's paths: `backend/app/features/{component_vision,seal_vision,spc,passport_crypto,scar_pdf}/`, `backend/app/core/ws_bus.py`, `contracts/ws_events.schema.json`, `docker-compose.https.yml`, `Caddyfile`, `certs/`, `fixtures/images/{inspection,seal}/`. Until Astra's modules land, I use clearly labelled interim adapters behind the same interfaces and replace them on merge.
+Astra's paths: `backend/app/features/{component_vision,seal_vision,spc,passport_crypto,scar_pdf}/`, `backend/app/core/ws_bus.py`, `contracts/ws_events.schema.json`, `docker-compose.https.yml`, `Caddyfile`, `certs/`, `fixtures/images/{inspection,seal}/`, `backend/scripts/evaluate_vision.py`, `datasets/`. The seam is `backend/app/ports.py` (mine); see `docs/ASTRA_BRIEF.md`. Until Astra's modules land, I use clearly labelled interim adapters behind the same interfaces and replace them on merge.
 
 ## Backend rules
 - Python 3.12, FastAPI, sync SQLAlchemy 2 + psycopg 3, Alembic, PostgreSQL 16. Every state transition runs in one transaction. Locks are taken in the order heat → lot → unit → package → order → shipment, ascending id.
