@@ -20,6 +20,9 @@ optional and provisional. An optional thresholds.roi is [x, y, width, height],
 normalized to [0, 1] for inspection or measured in original reference pixels
 after orientation correction for seals. The report describes offline
 measurements. It grants no production calibration or release decisions.
+When reference admission fails, the report preserves the failure and counts
+the probes as not evaluated. A standalone check can still assess each input.
+Photo hashes use original bytes. Manifest hashes normalize line endings to LF.
 """
 
 from __future__ import annotations
@@ -33,12 +36,16 @@ import sys
 import tempfile
 from collections import Counter
 from dataclasses import asdict, dataclass
+from io import BytesIO
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
 sys.path.insert(0, str(BACKEND))
+
+if TYPE_CHECKING:
+    from app.core.errors import ApiError
 
 
 @dataclass(frozen=True)
@@ -73,7 +80,7 @@ class Measurement:
 
 
 SOURCE = "PRERECORDED_EVAL"
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 LABELS = {
     "inspection": ("golden", "good", "defect", "blurry", "glare", "misaligned"),
     "seal": ("enroll", "intact_recapture", "torn", "repositioned", "bad_light"),
@@ -88,14 +95,66 @@ DEFINITIONS = {
     "accepted": "Inspection difference below hold, or a seal result of INTACT.",
     "flagged": "Inspection difference at or above hold, or a seal result of SUSPICIOUS.",
     "unverifiable": "No decision due to capture quality, registration, or ambiguous seal similarity.",
+    "not_evaluated": "Comparison skipped because the reference could not be admitted. Any standalone assessment applies only to the individual image.",
     "false_accepts": "Accepted probes labelled defect, blurry, glare, misaligned, torn, repositioned, or bad_light.",
     "false_rejects": "Flagged probes labelled good or intact_recapture. Unverifiable probes are counted separately.",
 }
-Method = tuple[str, str, dict, Callable[[bytes], Measurement]]
+INPUT_METADATA_DEFINITION = (
+    "Byte lengths and JPEG marker sequences are read directly from the original files. "
+    "Declared width and height are read from the image header without decoding pixels or applying orientation."
+)
+
+
+@dataclass(frozen=True)
+class Method:
+    version: str
+    score_name: str
+    thresholds: dict
+    input_limits: dict
+    reference_assessment: dict
+    check_probe: Callable[[bytes], dict]
+    measure: Callable[[bytes], Measurement]
 
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def input_metadata(data: bytes) -> dict:
+    from PIL import Image
+
+    metadata = {"size_bytes": len(data)}
+    try:
+        with Image.open(BytesIO(data), formats=("JPEG", "PNG")) as header:
+            width, height = header.size
+            metadata.update(declared_width=width, declared_height=height, declared_pixels=width * height)
+            if header.format == "JPEG":
+                marker = data.rfind(b"\xff\xd9")
+                metadata["jpeg_bytes_after_last_eoi_sequence"] = len(data) - marker - 2 if marker != -1 else None
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        # A readable header is optional diagnostic data; image admission remains with the service.
+        pass
+    return metadata
+
+
+def input_error(exc: ApiError) -> dict:
+    return {"code": exc.code, "message": exc.message, "status": exc.status, "details": exc.details}
+
+
+def assess_input(operation: str, check: Callable[[], dict]) -> dict:
+    from app.core.errors import ApiError
+
+    try:
+        assessment = check()
+    except ApiError as exc:
+        if exc.code != "INVALID_IMAGE":
+            raise
+        assessment = {
+            "passed": False,
+            "reasons": [exc.code, *exc.details.get("reason_codes", [])],
+            "error": input_error(exc),
+        }
+    return {"check": operation, **assessment}
 
 
 def read_manifest(path: Path, kind: str) -> tuple[Capture, list[Capture], dict, str]:
@@ -141,63 +200,96 @@ def read_manifest(path: Path, kind: str) -> tuple[Capture, list[Capture], dict, 
     overrides = manifest.get("thresholds", {})
     if not isinstance(overrides, dict):
         raise ValueError(f"{path} thresholds must be an object")
-    return reference, probes, overrides, digest(raw)
+    return reference, probes, overrides, digest(raw.replace(b"\r\n", b"\n"))
 
 
 def inspection_method(reference: bytes, overrides: dict) -> Method:
-    from app.features.component_vision.service import METHOD_VERSION, evaluate
+    from app.features.component_vision import service
     from app.ports import VisionProfile
 
     unknown = overrides.keys() - INSPECTION_THRESHOLDS.keys()
     if unknown:
         raise ValueError(f"Unknown inspection threshold fields: {sorted(unknown)}")
     thresholds = INSPECTION_THRESHOLDS | overrides
+    # Check configuration even when admission ends early on an invalid reference.
+    service._quality_thresholds(thresholds)
+    service._registration(thresholds)
+    hold = service._number(thresholds, "hold", 0.45, 0, 1)
+    reject = service._number(thresholds, "reject", 0.70, 0, 1)
+    if hold >= reject:
+        raise ValueError("The hold threshold must be below the reject threshold")
     profile = VisionProfile(
-        id="held-out-eval", part_id="eval", station_id="eval", method_version=METHOD_VERSION,
+        id="held-out-eval", part_id="eval", station_id="eval", method_version=service.METHOD_VERSION,
         calibration_version=1, calibrated=True, reference_sha256=digest(reference), thresholds=thresholds,
     )
-    # Enable scoring for this offline candidate profile and verify its golden image.
-    golden_check = evaluate(reference, reference, profile, evidence_source=SOURCE)
-    if golden_check.raw_score is None:
-        raise ValueError(f"Golden image is unusable: {', '.join(golden_check.reason_codes)}")
+
+    def check_reference() -> dict:
+        service.validate_reference(reference, thresholds)
+        evidence = service.evaluate(reference, reference, profile, evidence_source=SOURCE)
+        return {
+            "passed": evidence.raw_score is not None,
+            "quality_gate": evidence.quality_gate,
+            "reasons": evidence.reason_codes,
+        }
+
+    def probe_quality(probe: bytes) -> dict:
+        gate = service.quality_gate(probe, thresholds)
+        return {"passed": gate["passed"], "quality_gate": gate, "reasons": gate["failures"]}
 
     def measure(probe: bytes) -> Measurement:
-        evidence = evaluate(probe, reference, profile, evidence_source=SOURCE)
+        evidence = service.evaluate(probe, reference, profile, evidence_source=SOURCE)
         score = evidence.raw_score
         if score is None:
             outcome = "UNVERIFIABLE"
-        elif score >= thresholds["hold"]:
+        elif score >= hold:
             outcome = "FLAGGED"
         else:
             outcome = "ACCEPTED"
         return Measurement(outcome, score, evidence.reason_codes)
 
-    return METHOD_VERSION, "raw_score", thresholds, measure
+    limits = {"max_bytes": service.MAX_IMAGE_BYTES, "max_pixels": service._MAX_PIXELS, "max_side": service._MAX_EDGE}
+    return Method(
+        service.METHOD_VERSION, "raw_score", thresholds, limits,
+        assess_input("GOLDEN_ADMISSION", check_reference),
+        lambda probe: assess_input("INSPECTION_QUALITY_GATE", lambda: probe_quality(probe)), measure,
+    )
 
 
 def seal_method(reference: bytes, overrides: dict) -> Method:
-    from app.features.seal_vision.service import METHOD_VERSION, assess_reference, compare
+    from app.features.seal_vision import service
     from app.ports import SealProfile
 
-    defaults = SealProfile(method_version=METHOD_VERSION)
+    defaults = SealProfile(method_version=service.METHOD_VERSION)
     thresholds = asdict(defaults)
     del thresholds["method_version"]
     unknown = overrides.keys() - thresholds.keys()
     if unknown:
         raise ValueError(f"Unknown seal threshold fields: {sorted(unknown)}")
     thresholds.update(overrides)
-    if thresholds["roi"] is not None:
-        if not isinstance(thresholds["roi"], list) or len(thresholds["roi"]) != 4:
+    roi = thresholds["roi"]
+    if roi is not None:
+        if not isinstance(roi, list) or len(roi) != 4 or any(type(value) is not int for value in roi):
             raise ValueError("Seal ROI must be an array of four reference pixel values")
-        thresholds["roi"] = tuple(thresholds["roi"])
-    profile = SealProfile(method_version=METHOD_VERSION, **thresholds)
-    enrollment = assess_reference(reference, profile, evidence_source=SOURCE)
-    if not enrollment.usable:
-        raise ValueError(f"Seal reference is unusable: {', '.join(enrollment.reason_codes)}")
+        if min(roi[:2]) < 0 or min(roi[2:]) <= 0:
+            raise ValueError("Seal ROI requires a nonnegative origin and positive width and height")
+        thresholds["roi"] = tuple(roi)
+    profile = SealProfile(method_version=service.METHOD_VERSION, **thresholds)
+    # The enrollment ROI is defined in the reference frame. A standalone
+    # assessment of a probe has no corresponding coordinates.
+    probe_profile = SealProfile(method_version=service.METHOD_VERSION, **(thresholds | {"roi": None}))
     outcomes = {"INTACT": "ACCEPTED", "SUSPICIOUS": "FLAGGED", "UNVERIFIABLE": "UNVERIFIABLE"}
 
+    def enrollment(data: bytes, selected_profile: SealProfile) -> dict:
+        evidence = service.assess_reference(data, selected_profile, evidence_source=SOURCE)
+        return {
+            "passed": evidence.usable,
+            "reasons": evidence.reason_codes,
+            "quality_gate": evidence.quality_gate,
+            "keypoints": evidence.keypoints,
+        }
+
     def measure(probe: bytes) -> Measurement:
-        evidence = compare(reference, probe, profile, evidence_source=SOURCE)
+        evidence = service.compare(reference, probe, profile, evidence_source=SOURCE)
         return Measurement(
             outcome=outcomes[evidence.result],
             score=evidence.metrics["ssim"],
@@ -206,7 +298,13 @@ def seal_method(reference: bytes, overrides: dict) -> Method:
             metrics=evidence.metrics,
         )
 
-    return METHOD_VERSION, "ssim", thresholds, measure
+    limits = {"max_bytes": service.MAX_IMAGE_BYTES, "max_pixels": service.MAX_IMAGE_PIXELS, "max_side": service.MAX_IMAGE_SIDE}
+    return Method(
+        service.METHOD_VERSION, "ssim", thresholds, limits,
+        assess_input("SEAL_ENROLLMENT", lambda: enrollment(reference, profile)),
+        lambda probe: assess_input("SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT", lambda: enrollment(probe, probe_profile)),
+        measure,
+    )
 
 
 def evaluate_set(kind: str, path: Path, output: Path) -> dict:
@@ -217,8 +315,9 @@ def evaluate_set(kind: str, path: Path, output: Path) -> dict:
     if output in {path, reference.path, *(capture.path for capture in probes)}:
         raise ValueError(f"Output would replace an input file: {output}")
     reference_bytes = reference.path.read_bytes()
-    method = inspection_method if kind == "inspection" else seal_method
-    version, score_name, thresholds, measure = method(reference_bytes, overrides)
+    make_method = inspection_method if kind == "inspection" else seal_method
+    method = make_method(reference_bytes, overrides)
+    admitted = method.reference_assessment["passed"]
     reference_digest = digest(reference_bytes)
     seen = {reference_digest}
     conditions = {}
@@ -229,12 +328,19 @@ def evaluate_set(kind: str, path: Path, output: Path) -> dict:
         if sha in seen:
             raise ValueError(f"Duplicate capture bytes in {path}: {capture.path.name}")
         seen.add(sha)
-        try:
-            measurement = measure(data)
-        except ApiError as exc:
-            if exc.code != "INVALID_IMAGE":
-                raise
-            measurement = Measurement("UNVERIFIABLE", None, [exc.code], exc.message)
+        result = capture.provenance(path.parent, sha)
+        result["input_metadata"] = input_metadata(data)
+        if admitted:
+            try:
+                measurement = method.measure(data)
+            except ApiError as exc:
+                if exc.code != "INVALID_IMAGE":
+                    raise
+                measurement = Measurement("UNVERIFIABLE", None, [exc.code], exc.message)
+                result["error"] = input_error(exc)
+        else:
+            measurement = Measurement("NOT_EVALUATED", None, ["REFERENCE_UNUSABLE"])
+            result["standalone_assessment"] = method.check_probe(data)
         outcome = measurement.outcome
         good = capture.label == LABELS[kind][1]
         counts = conditions.setdefault(capture.label, dict.fromkeys(DEFINITIONS, 0))
@@ -242,13 +348,19 @@ def evaluate_set(kind: str, path: Path, output: Path) -> dict:
         counts[outcome.lower()] += 1
         counts["false_accepts"] += int(not good and outcome == "ACCEPTED")
         counts["false_rejects"] += int(good and outcome == "FLAGGED")
-        results.append({**capture.provenance(path.parent, sha), **asdict(measurement)})
+        results.append({**result, **asdict(measurement)})
     return {
-        "method_version": version,
-        "score_name": score_name,
-        "thresholds": thresholds,
+        "method_version": method.version,
+        "score_name": method.score_name,
+        "thresholds": method.thresholds,
         "threshold_status": "PROVISIONAL",
-        "reference": reference.provenance(path.parent, reference_digest),
+        "comparison_status": "COMPLETED" if admitted else "BLOCKED_REFERENCE",
+        "input_limits": method.input_limits,
+        "reference": {
+            **reference.provenance(path.parent, reference_digest),
+            "input_metadata": input_metadata(reference_bytes),
+            "admission": method.reference_assessment,
+        },
         "manifest_sha256": manifest_digest,
         "conditions": conditions,
         "totals": {field: sum(group[field] for group in conditions.values()) for field in DEFINITIONS},
@@ -269,6 +381,7 @@ def write_report(path: Path, metrics: dict[str, dict]) -> str:
             "report_version": REPORT_VERSION,
             "evidence_source": SOURCE,
             "definitions": DEFINITIONS,
+            "input_metadata_definition": INPUT_METADATA_DEFINITION,
         }
         if len(metrics) == 1 and path.exists():
             try:
@@ -280,7 +393,7 @@ def write_report(path: Path, metrics: dict[str, dict]) -> str:
             report.update(previous)
         report.update(metrics)
         rendered = json.dumps(report, indent=2, allow_nan=False) + "\n"
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent, delete=False) as output:
             tmp = Path(output.name)
             output.write(rendered)
             output.flush()
