@@ -748,6 +748,18 @@
         "title": "PolicyIn",
         "type": "object"
       },
+      "PreviewIn": {
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "PreviewIn",
+        "type": "object"
+      },
       "ProfileIn": {
         "properties": {
           "part_id": {
@@ -824,6 +836,25 @@
           "keys"
         ],
         "title": "PublicKeys",
+        "type": "object"
+      },
+      "RecallIn": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          }
+        },
+        "required": [
+          "scope",
+          "reason"
+        ],
+        "title": "RecallIn",
         "type": "object"
       },
       "ReviewIn": {
@@ -907,6 +938,53 @@
           "client_event_id"
         ],
         "title": "ScanIn",
+        "type": "object"
+      },
+      "Scope": {
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "HEAT",
+                  "LOT",
+                  "UNIT",
+                  "PACKAGE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "title": "Scope",
         "type": "object"
       },
       "ShipmentIn": {
@@ -3332,6 +3410,216 @@
         ]
       }
     },
+    "/api/v1/recalls": {
+      "get": {
+        "operationId": "recalls_api_v1_recalls_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recalls Api V1 Recalls Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Recalls",
+        "tags": [
+          "trace",
+          "recall"
+        ]
+      },
+      "post": {
+        "operationId": "execute_api_v1_recalls_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Execute Api V1 Recalls Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute",
+        "tags": [
+          "trace",
+          "recall"
+        ]
+      }
+    },
+    "/api/v1/recalls/preview": {
+      "post": {
+        "operationId": "preview_api_v1_recalls_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Api V1 Recalls Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview",
+        "tags": [
+          "trace",
+          "recall"
+        ]
+      }
+    },
+    "/api/v1/recalls/{recall_id}": {
+      "get": {
+        "operationId": "recall_api_v1_recalls__recall_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recall_id",
+            "required": true,
+            "schema": {
+              "title": "Recall Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recall Api V1 Recalls  Recall Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recall",
+        "tags": [
+          "trace",
+          "recall"
+        ]
+      }
+    },
+    "/api/v1/recalls/{recall_id}/release": {
+      "post": {
+        "operationId": "release_api_v1_recalls__recall_id__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recall_id",
+            "required": true,
+            "schema": {
+              "title": "Recall Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app__features__alerts__router__ReasonIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Release Api V1 Recalls  Recall Id  Release Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release",
+        "tags": [
+          "trace",
+          "recall"
+        ]
+      }
+    },
     "/api/v1/reports": {
       "get": {
         "operationId": "reports_api_v1_reports_get",
@@ -4044,6 +4332,138 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/trace": {
+      "get": {
+        "operationId": "trace_api_v1_trace_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "heat",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Heat"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lot",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lot"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Unit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "package",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Package"
+            }
+          },
+          {
+            "in": "query",
+            "name": "serial",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Serial"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Trace Api V1 Trace Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trace",
+        "tags": [
+          "trace",
+          "recall"
         ]
       }
     },
