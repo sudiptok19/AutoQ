@@ -41,6 +41,7 @@ def summary(db: Session = Depends(get_db), _: Principal = Depends(current_princi
         "held_packages": sum(1 for p in pkgs if p["held"] or p["state"] == "SEAL_REVIEW"),
         "open_shipments": db.scalar(select(func.count()).select_from(m.Shipment).where(m.Shipment.status == "OPEN")),
         "open_alerts": db.scalar(select(func.count()).select_from(m.Alert).where(m.Alert.status == "OPEN")),
+        "open_tasks": db.scalar(select(func.count()).select_from(m.SegregationTask).where(m.SegregationTask.status == "OPEN")),
         "recent_scans": [scan_view(db, s) for s in recent],
         "dispatch_eligible_units": eligible,
         "first_pass_yield": (verdicts.get("PASS", 0) / total) if total else None,

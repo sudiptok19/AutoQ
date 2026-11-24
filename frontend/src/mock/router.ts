@@ -1,5 +1,5 @@
 /* Mock implementation of the /api/v1 contract. Mirrors server-side policy so the UI can be exercised end-to-end. */
-import type { Containment, Eligibility, FourMEvent, GateCheck, Inspection, Lot, Package, Reason, Recall, RecallImpact, Role, ScanDecision, SealCheck, Shipment, SpcSeries, TraceGraph, TraceNode, TraceEdge, User } from '../api/types'
+import type { Report8D, ReportItem, SegregationTask, Containment, Eligibility, FourMEvent, GateCheck, Inspection, Lot, Package, Reason, Recall, RecallImpact, Role, ScanDecision, SealCheck, Shipment, SpcSeries, TraceGraph, TraceNode, TraceEdge, User } from '../api/types'
 import { goldenDiff, loadImageData, qualityGate, renderBracket } from '../lib/cv'
 import { verifyToken, sha256Hex } from '../lib/token'
 import { GENESIS, verifyChain } from '../lib/chain'
@@ -480,14 +480,127 @@ r('POST', '/recalls', c => {
   if (scope.type === 'LOT') S.lotHeld[scope.id] = true
   syncPassportHolds()
   const rc: Recall = { id: nextId('rcl'), scope: { ...scope, label: scopeLabel(scope.type, scope.id)! } as any, reason: c.body.reason, executed_by: user.username, executed_at: now(), query_ms: 0, affected: a, evidence: { genealogy_query: 'heat → lot_heats → lot → unit → package_item → package → accepted scan → shipment → movement events', as_of: now() }, audit_event_ids: auditIds }
+  const label = scopeLabel(scope.type, scope.id)!
+  const task = (type: SegregationTask['type'], shipment_id: string, action: string, pkg?: { id: string; label: string }): SegregationTask => ({
+    id: nextId('task'), type, status: 'OPEN', reason: `Recall ${label}: ${c.body.reason}`, package_id: pkg?.id ?? null, package_label: pkg?.label ?? null,
+    shipment_id, shipment_code: S.shipments.find(x => x.id === shipment_id)?.code ?? null, recall_id: rc.id, scan_id: null, consignee_action: { action },
+    created_at: now(), completed_by: null, completed_at: null, completion_reason: null })
+  const tasks: SegregationTask[] = [
+    ...a.loaded_not_departed.flatMap(l => S.shipments.find(x => x.id === l.shipment_id)!.loaded_package_ids.filter(pid => S.packages.find(p => p.id === pid)!.unit_ids.some(u => ids.includes(u)))
+      .map(pid => task('REMOVAL_REQUIRED', l.shipment_id, 'Physically unload and segregate the package before departure', S.packages.find(p => p.id === pid)))),
+    ...a.in_transit.map(t => task('IN_TRANSIT_RECALL', t.shipment_id, `Contact the carrier (${t.vehicle_no}) and ${t.customer}; quarantine on arrival`)),
+    ...a.delivered.map(d => task('NOTIFY_CUSTOMER', d.shipment_id, `Notify ${d.customer} to quarantine ${d.units} delivered unit(s)`)),
+  ]
+  ;(S.tasks ??= []).push(...tasks)
+  Object.assign(rc, { task_ids: tasks.map(t => t.id), unit_ids: ids, released_at: null, released_by: null, release_reason: null })
   auditIds.push(audit(user.username, 'RECALL_EXECUTED', 'recall', rc.id, c.body.reason, { scope: scope.type, target: rc.scope.label, units: a.units, packages_held: a.packages_held }).id)
   for (const t of a.in_transit) auditIds.push(audit('policy', 'RECALL_NOTIFY_IN_TRANSIT', 'shipment', t.shipment_id, undefined, { units: t.units }).id)
   for (const d of a.delivered) auditIds.push(audit('policy', 'RECALL_NOTIFY_DELIVERED', 'shipment', d.shipment_id, undefined, { units: d.units }).id)
   rc.query_ms = Math.round((performance.now() - t0) * 10) / 10
   S.recalls.push(rc); save(); return rc
 })
-r('GET', '/recalls', () => ({ items: S.recalls.slice().reverse(), next_cursor: null }))
-r('GET', '/recalls/:id', ({ params }) => S.recalls.find(x => x.id === params[0]) ?? nf('Recall'))
+const recallView = (rc: Recall) => ({ ...rc, segregation_tasks: ((rc as any).task_ids ?? []).map((id: string) => (S.tasks ?? []).find(t => t.id === id)).filter(Boolean) })
+r('GET', '/recalls', () => ({ items: S.recalls.slice().reverse().map(recallView), next_cursor: null }))
+r('GET', '/recalls/:id', ({ params }) => recallView(S.recalls.find(x => x.id === params[0]) ?? nf('Recall')))
+r('POST', '/recalls/:id/release', c => {
+  const user = need(c, 'quality_manager')
+  const rc = S.recalls.find(x => x.id === c.params[0]) ?? nf('Recall')
+  if (!c.body?.reason?.trim()) throw new HttpError(422, 'REASON_REQUIRED', 'A release reason is required')
+  if (rc.released_at) throw new HttpError(409, 'RECALL_RELEASED', 'Recall already released')
+  const ids: string[] = (rc as any).unit_ids ?? unitsInScope(rc.scope)
+  const stillHeld = new Set(S.recalls.filter(x => x.id !== rc.id && x.executed_at && !x.released_at).flatMap(x => (x as any).unit_ids ?? []))
+  for (const id of ids) if (!stillHeld.has(id)) unit(id).held = false
+  for (const p of S.packages) if (p.held && p.unit_ids.every(u => !unit(u).held)) { p.held = false; p.hold_reasons = p.hold_reasons.filter(h => h.code !== 'QUARANTINED') }
+  if (rc.scope.type === 'HEAT') { delete S.lotHeld['heat:' + rc.scope.id]; S.lots.filter(l => l.heat_ids.includes(rc.scope.id)).forEach(l => delete S.lotHeld[l.id]) }
+  if (rc.scope.type === 'LOT') delete S.lotHeld[rc.scope.id]
+  syncPassportHolds()
+  Object.assign(rc, { released_at: now(), released_by: user.username, release_reason: c.body.reason })
+  audit(user.username, 'RECALL_RELEASED', 'recall', rc.id, c.body.reason)
+  save()
+  return { ...recallView(rc), passports_reactivated: ids.filter(id => passportOf(unit(id))?.status === 'ACTIVE').length }
+})
+r('GET', '/segregation-tasks', ({ query }) => ({ items: (S.tasks ?? []).filter(t => !query.get('status') || t.status === query.get('status')).slice().reverse(), next_cursor: null }))
+r('POST', '/segregation-tasks/:id/complete', c => {
+  const user = need(c, 'dispatcher', 'quality_engineer', 'quality_manager')
+  const t = (S.tasks ?? []).find(x => x.id === c.params[0]) ?? nf('Task')
+  if (!c.body?.reason?.trim()) throw new HttpError(422, 'REASON_REQUIRED', 'Say what was done')
+  if (t.status !== 'OPEN') throw new HttpError(409, 'TASK_COMPLETED', 'Task already completed')
+  Object.assign(t, { status: 'COMPLETED', completed_by: user.username, completed_at: now(), completion_reason: c.body.reason })
+  audit(user.username, 'SEGREGATION_TASK_COMPLETED', 'task', t.id, c.body.reason); save(); return t
+})
+
+/* ── 8D reports (template drafts; PDF rendering is live-backend only) ── */
+function draft8d(type: string, id: string): Pick<Report8D, 'meta' | 'counts' | 'sections'> {
+  const pending = (text: string): ReportItem => ({ kind: 'PENDING_HUMAN', text, evidence: [] })
+  const fact = (text: string, ev: ReportItem['evidence']): ReportItem => ({ kind: 'FACT', text, evidence: ev })
+  if (type === 'RECALL') {
+    const rc = S.recalls.find(x => x.id === id) ?? nf('Recall')
+    const ev = [{ type: 'RECALL', id: rc.id, label: `Recall of ${rc.scope.type.toLowerCase()} ${rc.scope.label}` }]
+    const tasks = recallView(rc).segregation_tasks as SegregationTask[]
+    const sum = (xs: { units: number }[]) => xs.reduce((n, x) => n + x.units, 0)
+    return {
+      meta: { source_label: ev[0].label }, counts: { affected_units: rc.affected.units, held_packages: rc.affected.packages_held },
+      sections: [
+        { key: 'D1', title: 'Team', items: [pending('Name the recall team and the supplier contact.')] },
+        { key: 'D2', title: 'Problem description', items: [fact(`Quarantine of ${rc.scope.type.toLowerCase()} ${rc.scope.label}: ${rc.reason}`, ev),
+          fact(`${rc.affected.units} units affected: ${sum(rc.affected.in_transit)} in transit, ${sum(rc.affected.delivered)} delivered.`, ev)] },
+        { key: 'D3', title: 'Interim containment', items: [fact(`${rc.affected.packages_held} package(s) held; ${tasks.length} physical action task(s) raised.`, tasks.map(t => ({ type: 'TASK', id: t.id, label: `${t.type} ${t.status}` })))] },
+        { key: 'D4', title: 'Root cause', items: [pending('Root cause at the material/supplier level not yet verified.')] },
+        { key: 'D5', title: 'Permanent corrective action', items: [pending('Define the permanent corrective action with the supplier.')] },
+        { key: 'D6', title: 'Verification of effectiveness', items: [pending('Verification pending.')] },
+        { key: 'D7', title: 'Prevent recurrence', items: [pending('Recurrence prevention pending.')] },
+        { key: 'D8', title: 'Closure and recognition', items: [pending('Closure requires quality-manager approval with review evidence.')] },
+      ],
+    }
+  }
+  const ev = S.events.find(e => e.id === id || e.code === id) ?? nf('4M event')
+  const cont = S.containments.find(x => x.id === ev.containment_id)
+  const evd = [{ type: 'FOUR_M', id: ev.id, label: `${ev.code} ${ev.category}` }]
+  return {
+    meta: { source_label: `4M change point ${ev.code}` }, counts: { affected_units: cont?.affected_unit_ids.length ?? 0 },
+    sections: [
+      { key: 'D1', title: 'Team', items: [pending('Name the line team and maintenance owner.')] },
+      { key: 'D2', title: 'Problem description', items: [fact(`${ev.planned ? 'Planned' : 'Unplanned'} ${ev.category} change on ${S.lines.find(l => l.id === ev.line_id)?.name}: ${ev.description} (${ev.reason}).`, evd)] },
+      { key: 'D3', title: 'Interim containment', items: [fact(`${cont?.affected_unit_ids.length ?? 0} unshipped unit(s) held; containment ${cont?.status ?? 'unknown'}.`, evd)] },
+      { key: 'D4', title: 'Root cause', items: [{ kind: 'HYPOTHESIS', text: `The ${ev.category.toLowerCase()} change may have altered the process; not verified.`, evidence: evd }] },
+      { key: 'D5', title: 'Permanent corrective action', items: [pending('Define the corrective action.')] },
+      { key: 'D6', title: 'Verification of effectiveness', items: [pending('Verification pending.')] },
+      { key: 'D7', title: 'Prevent recurrence', items: [{ kind: 'PROPOSED', text: 'Require first-off approval before restarting after this kind of change.', evidence: [] }] },
+      { key: 'D8', title: 'Closure and recognition', items: [pending('Closure requires quality-manager approval with review evidence.')] },
+    ],
+  }
+}
+const reportView = (x: Report8D) => x
+r('POST', '/reports/8d', c => {
+  const user = need(c, 'quality_engineer', 'quality_manager')
+  const src = c.body?.source ?? {}
+  if (!['RECALL', 'FOUR_M'].includes(src.type)) throw new HttpError(422, 'VALIDATION', 'Mock supports RECALL and FOUR_M sources')
+  const body = draft8d(src.type, src.id)
+  const rep: Report8D = { id: nextId('rpt'), revision_id: nextId('rrev'), status: 'DRAFT', source_type: src.type, source_id: src.id, generator: 'template-8d-0.1',
+    created_at: now(), as_of: now(), evidence_source: 'MOCK', approved_by: null, approved_at: null, snapshot_sha256: '', pdf_url: '', pdf_sha256: null, revisions: 1, ...body }
+  rep.snapshot_sha256 = sha256Hex(JSON.stringify(body))
+  S.reports.push(rep); audit(user.username, 'REPORT_DRAFTED', 'report', rep.id, undefined, { source: `${src.type}:${src.id}` }); save(); return reportView(rep)
+})
+r('GET', '/reports', () => ({ items: S.reports.slice().reverse().map(reportView), next_cursor: null }))
+r('GET', '/reports/:id', ({ params }) => reportView(S.reports.find(x => x.id === params[0]) ?? nf('Report')))
+r('POST', '/reports/:id/approve', c => {
+  const user = need(c, 'quality_manager')
+  const rep: Report8D = S.reports.find(x => x.id === c.params[0]) ?? nf('Report')
+  if (rep.status === 'APPROVED') throw new HttpError(409, 'REPORT_APPROVED', 'Report already approved')
+  const ev: string[] = c.body?.review_evidence_ids ?? []
+  if (!ev.length || ev.some(s => !S.evidence[s])) throw new HttpError(409, 'REPORT_INCOMPLETE', 'Approval requires review evidence in the evidence store')
+  Object.assign(rep, { status: 'APPROVED', approved_by: user.username, approved_at: now(), revisions: rep.revisions + 1, revision_id: nextId('rrev') })
+  rep.snapshot_sha256 = sha256Hex(JSON.stringify(rep.sections) + rep.approved_at)
+  audit(user.username, 'REPORT_APPROVED', 'report', rep.id, c.body.reason, { review_evidence: ev.join(',') }); save(); return rep
+})
+r('POST', '/evidence', async c => {
+  const user = need(c, 'quality_engineer', 'quality_manager')
+  const f = (c.body as FormData).get('file') as Blob
+  const bytes = new Uint8Array(await f.arrayBuffer())
+  const sha = sha256Hex(bytes); S.evidence[sha] = `data:${f.type || 'application/octet-stream'};base64,${btoa(String.fromCharCode(...bytes.slice(0, 2_000_000)))}`
+  audit(user.username, 'EVIDENCE_UPLOADED', 'evidence', sha); save()
+  return { sha256: sha, media_type: f.type, byte_size: bytes.length, url: `mock-evidence:${sha}`, evidence_source: 'UPLOAD', purpose: 'REVIEW_RECORD' }
+})
 
 r('GET', '/trace', ({ query }) => {
   const code = query.get('q') ?? query.get('heat') ?? query.get('lot') ?? query.get('unit') ?? query.get('package') ?? query.get('serial') ?? ''
@@ -557,7 +670,7 @@ r('GET', '/audit/verify', () => verifyAudit())
 r('GET', '/dashboard/summary', () => {
   const by = { UNINSPECTED: 0, PASS: 0, HOLD: 0, REJECT: 0 }; S.units.forEach(u => by[u.quality_status]++)
   const done = S.inspections.length ? S.inspections.filter(i => i.verdict === 'PASS').length / S.inspections.length : null
-  return { units_by_status: by, active_containments: activeContainments().length, held_packages: S.packages.filter(p => p.held || p.state === 'SEAL_REVIEW').length, open_shipments: S.shipments.filter(s => s.status === 'OPEN').length, open_alerts: openAlerts().length, recent_scans: S.scans.slice(-8).reverse(), dispatch_eligible_units: S.units.filter(u => eligibility(u).dispatch_eligible && !isShipped(u)).length, first_pass_yield: done }
+  return { units_by_status: by, active_containments: activeContainments().length, held_packages: S.packages.filter(p => p.held || p.state === 'SEAL_REVIEW').length, open_shipments: S.shipments.filter(s => s.status === 'OPEN').length, open_alerts: openAlerts().length, open_tasks: (S.tasks ?? []).filter(t => t.status === 'OPEN').length, recent_scans: S.scans.slice(-8).reverse(), dispatch_eligible_units: S.units.filter(u => eligibility(u).dispatch_eligible && !isShipped(u)).length, first_pass_yield: done }
 })
 
 /* ── offline ── */

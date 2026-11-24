@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.core import audit
@@ -31,6 +32,13 @@ def me(p: Principal = Depends(current_principal)) -> dict:
 def evidence(sha256: str = Path(pattern=r"^[0-9a-f]{64}$"), db: Session = Depends(get_db), _: Principal = Depends(evidence_principal)) -> Response:
     data, media_type = get_evidence(db, sha256)
     return Response(data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable", "ETag": f'"{sha256}"', "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/evidence", status_code=201)
+async def upload(file: UploadFile = File(), purpose: str = Form("REVIEW_RECORD"), db: Session = Depends(get_db),
+                 p: Principal = Depends(require_roles("quality_engineer", "quality_manager"))) -> dict:
+    data = await file.read()
+    return await run_in_threadpool(service.upload_evidence, db, p, data, file.filename or "upload", purpose)
 
 
 @router.get("/audit")

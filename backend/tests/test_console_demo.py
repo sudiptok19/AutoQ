@@ -43,3 +43,23 @@ def test_access_token_query_is_accepted_for_evidence_only(client, auth):
     assert client.get(f"{API}/evidence/{sha}?access_token=not-a-jwt").status_code == 401
     assert client.get(f"{API}/evidence/{sha}").status_code == 401
     assert client.get(f"{API}/units?access_token={tok}").status_code == 401           # never on other routes
+
+
+def test_recall_tasks_then_8d_approved_with_uploaded_review_record(client, auth, db):
+    Demo(client, log=lambda _: None).run()
+    rc = client.post(f"{API}/recalls", json={"scope": {"type": "HEAT", "code": "H-7781"}, "reason": "Supplier nodularity"}, headers=auth("qm.farhan")).json()
+    tasks = rc["segregation_tasks"]
+    assert {t["type"] for t in tasks} == {"REMOVAL_REQUIRED", "IN_TRANSIT_RECALL", "NOTIFY_CUSTOMER"}
+    assert client.get(f"{API}/dashboard/summary", headers=auth("op.ravi")).json()["open_tasks"] == len(tasks)
+    done = client.post(f"{API}/segregation-tasks/{tasks[0]['id']}/complete", json={"reason": "Moved to cage Q2"}, headers=auth("disp.kiran")).json()
+    assert done["status"] == "COMPLETED" and done["completed_by"] == "disp.kiran"
+
+    rep = client.post(f"{API}/reports/8d", json={"source": {"type": "RECALL", "id": rc["id"]}}, headers=auth("qe.ananya")).json()
+    pdf = b"%PDF-1.4\n% review minutes 24 Nov\n"
+    assert client.post(f"{API}/evidence", files={"file": ("m.pdf", pdf, "application/pdf")}, headers=auth("op.ravi")).status_code == 403
+    assert client.post(f"{API}/evidence", files={"file": ("x.bin", b"MZ\x90\x00", "application/octet-stream")}, headers=auth("qm.farhan")).status_code == 415
+    up = client.post(f"{API}/evidence", files={"file": ("m.pdf", pdf, "application/pdf")}, headers=auth("qm.farhan"))
+    assert up.status_code == 201 and up.json()["evidence_source"] == "UPLOAD" and up.json()["media_type"] == "application/pdf"
+    ok = client.post(f"{API}/reports/{rep['id']}/approve", json={"reason": "Reviewed", "review_evidence_ids": [up.json()["sha256"]]}, headers=auth("qm.farhan")).json()
+    assert ok["status"] == "APPROVED" and ok["revisions"] == 2
+    assert db.scalar(select(func.count()).select_from(m.AuditEvent).where(m.AuditEvent.action == "EVIDENCE_UPLOADED")) == 1
