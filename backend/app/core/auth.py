@@ -84,6 +84,17 @@ def current_principal(request: Request, db: Session = Depends(get_db)) -> Princi
     return principal_from_token(db, h[7:].strip())
 
 
+def evidence_principal(request: Request, db: Session = Depends(get_db)) -> Principal:
+    """Evidence only: an <img> cannot send headers, so `?access_token=` is accepted as well (CONTRACT §2 note).
+    Same JWT validation; never accepted on any other route."""
+    if request.headers.get("authorization", "").lower().startswith("bearer "):
+        return current_principal(request, db)
+    t = request.query_params.get("access_token", "")
+    if not t:
+        raise ApiError(401, "UNAUTHENTICATED", "Sign in required")
+    return principal_from_token(db, t)
+
+
 def require_roles(*roles: str):
     def dep(p: Principal = Depends(current_principal)) -> Principal:
         if roles and not p.has(*roles):

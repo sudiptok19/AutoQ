@@ -27,6 +27,7 @@ from app.features.scar_pdf.router import router as scar_pdf  # Astra A5
 from app.features.spc.router import router as spc  # Astra A3
 from app.ports import register_ports
 from app.features.platform.router import router as platform
+from app.features.console_demo.router import router as console_demo
 
 API = "/api/v1"
 
@@ -45,7 +46,7 @@ def create_app() -> FastAPI:
     errors.install(app)
     app.add_middleware(CORSMiddleware, allow_origins=settings().cors_list, allow_credentials=False, allow_methods=["*"], allow_headers=["*"], expose_headers=["x-request-id"])
     register_ports(PgPorts())
-    for r in (platform, auth_evidence, catalog_sampling, inspection_passports, containment, packaging, dispatch, offline_scanner, recall, component_vision, seal_vision, passport_crypto, spc, report_workflow, scar_pdf, alerts):
+    for r in (platform, auth_evidence, catalog_sampling, inspection_passports, containment, packaging, dispatch, offline_scanner, recall, component_vision, seal_vision, passport_crypto, spc, report_workflow, scar_pdf, alerts, console_demo):
         app.include_router(r, prefix=API)
     app.include_router(ws_router)  # /ws/events (same origin, ticket auth)
     return app
