@@ -77,6 +77,8 @@ def shipment_view(db: Session, s: m.Shipment, *, scans: bool = True) -> dict:
            "loaded_package_ids": [ld.package_id for ld in loads], "loaded_units": sum(ld.unit_count for ld in loads), "expected_units": expected_units(db, s),
            "movements": [{"type": mv.type, "location": mv.location, "occurred_at": _iso(mv.occurred_at), "recorded_at": _iso(mv.recorded_at)} for mv in moves],
            "closed_at": _iso(s.closed_at), "created_at": _iso(s.created_at)}
+    from app.features.offline_scanner.service import pending_for_shipment
+    out["offline_devices_not_synced"] = pending_for_shipment(db, s.id)  # informational (best effort)
     if scans:
         out["scans"] = [scan_view(db, x) for x in db.scalars(select(m.Scan).where(m.Scan.shipment_id == s.id).order_by(m.Scan.decided_at.desc()).limit(200))]
     return out
@@ -292,7 +294,7 @@ def _revalidate(db: Session, pkgs: list[m.Package], s: m.Shipment) -> list[dict]
     return problems
 
 
-def close(db: Session, p: Principal, shipment_key: str) -> dict:
+def close(db: Session, p: Principal, shipment_key: str, unsynced: int = 0) -> dict:
     s0 = find_shipment(db, shipment_key)
     locks, pkgs, s = _lock_shipment_contents(db, s0)
     if s.status != "OPEN":
@@ -303,6 +305,8 @@ def close(db: Session, p: Principal, shipment_key: str) -> dict:
         blockers.append({"code": "EMPTY_MANIFEST", "message": "Nothing loaded"})
     elif loaded != exp and not policies.settings_of(policies.active(db)).allow_partial_close:
         blockers.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
+    if unsynced:
+        blockers.append({"code": "PROVISIONAL_PENDING", "message": f"{unsynced} offline scan(s) on this device are not synced yet"})
     for prob in _revalidate(db, pkgs, s):
         blockers.append({"code": "LOADED_PACKAGE_BLOCKED", "message": f"{prob['label']}: {', '.join(b['code'] for b in prob['blockers'])} — unload required", "package_id": prob["package_id"]})
     if blockers:
