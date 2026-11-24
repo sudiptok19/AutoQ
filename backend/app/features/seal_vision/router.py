@@ -24,7 +24,7 @@ async def seal_check(
     validate_evidence_source(evidence_source)
     probe = await image.read(MAX_IMAGE_BYTES + 1)
     if len(probe) > MAX_IMAGE_BYTES:
-        raise ApiError(413, "EVIDENCE_TOO_LARGE", "Image larger than 10 MiB",
+        raise ApiError(422, "INVALID_IMAGE", "The seal image exceeds the 10 MiB limit.",
                        {"component": "seal_vision", "remediation": "Upload a JPEG or PNG that is at most 10 MiB."})
     media_type = sniff(probe)
     if media_type not in ("image/jpeg", "image/png") or image.content_type not in (None, media_type):
