@@ -222,6 +222,18 @@
         "title": "ClearIn",
         "type": "object"
       },
+      "CloseIn": {
+        "properties": {
+          "unsynced_offline_events": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unsynced Offline Events",
+            "type": "integer"
+          }
+        },
+        "title": "CloseIn",
+        "type": "object"
+      },
       "Containment": {
         "properties": {
           "first_n": {
@@ -291,6 +303,70 @@
           "city"
         ],
         "title": "CustomerIn",
+        "type": "object"
+      },
+      "EventIn": {
+        "properties": {
+          "client_event_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9:._\\-]+$",
+            "title": "Client Event Id",
+            "type": "string"
+          },
+          "hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Hash",
+            "type": "string"
+          },
+          "local_decision": {
+            "title": "Local Decision",
+            "type": "string"
+          },
+          "local_reasons": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Local Reasons",
+            "type": "array"
+          },
+          "prev_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Prev Hash",
+            "type": "string"
+          },
+          "scanned_at": {
+            "title": "Scanned At",
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "shipment_id": {
+            "title": "Shipment Id",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_event_id",
+          "seq",
+          "prev_hash",
+          "hash",
+          "token",
+          "shipment_id",
+          "scanned_at",
+          "local_decision"
+        ],
+        "title": "EventIn",
         "type": "object"
       },
       "FourMIn": {
@@ -1065,6 +1141,40 @@
           "name"
         ],
         "title": "SupplierIn",
+        "type": "object"
+      },
+      "SyncIn": {
+        "properties": {
+          "device_id": {
+            "pattern": "^[A-Za-z0-9._\\-]{3,40}$",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventIn"
+            },
+            "maxItems": 500,
+            "title": "Events",
+            "type": "array"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          }
+        },
+        "required": [
+          "device_id",
+          "events"
+        ],
+        "title": "SyncIn",
         "type": "object"
       },
       "UnitsIn": {
@@ -2594,6 +2704,60 @@
         ]
       }
     },
+    "/api/v1/offline/snapshot": {
+      "get": {
+        "operationId": "snapshot_api_v1_offline_snapshot_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "shipment_id",
+            "required": true,
+            "schema": {
+              "title": "Shipment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._\\-]{3,40}$",
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Snapshot Api V1 Offline Snapshot Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Snapshot",
+        "tags": [
+          "offline"
+        ]
+      }
+    },
     "/api/v1/orders": {
       "get": {
         "operationId": "orders_api_v1_orders_get",
@@ -4078,6 +4242,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CloseIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -4332,6 +4513,49 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/sync/scans": {
+      "post": {
+        "operationId": "sync_api_v1_sync_scans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sync Api V1 Sync Scans Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sync",
+        "tags": [
+          "offline"
         ]
       }
     },
