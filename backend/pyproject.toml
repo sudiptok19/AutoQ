@@ -22,6 +22,7 @@ dependencies = [
   "reportlab>=4.2",
   "jsonschema>=4.23",
   "pillow>=11.0",  # seal_vision (Astra A2) EXIF orientation
+  "simplejpeg==1.9.0",  # component/seal vision (Astra): strict JPEG decode incl. trailing-data phone captures
 ]
 
 [dependency-groups]
