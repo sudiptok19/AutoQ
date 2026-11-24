@@ -20,7 +20,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   let status: number, json: any
   if (API_MODE === 'mock') ({ status, json } = await mockFetch(method, BASE + path, headers, body))
   else {
-    const res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body) })
+    let res: Response
+    try {
+      res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body) })
+    } catch (e) {  // offline, DNS, TLS or gateway unreachable: not an auth decision
+      throw new ApiErr(0, 'NETWORK_UNAVAILABLE', 'Server not reachable', { cause: String(e) })
+    }
     status = res.status; json = res.headers.get('content-type')?.includes('json') ? await res.json() : null
   }
   if (status >= 400) {

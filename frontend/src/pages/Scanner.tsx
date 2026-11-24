@@ -54,7 +54,7 @@ function ResultCard({ r, onDismiss }: { r: Shown; onDismiss: () => void }) {
 }
 
 export default function Scanner() {
-  const { user, can, login } = useAuth()
+  const { user, can, login, unverified } = useAuth()
   const net = useNet()
   const [tab, setTab] = useState<Tab>('scan')
   const [ships, setShips] = useState<ShipView[] | null>(null)
@@ -192,6 +192,7 @@ export default function Scanner() {
         <Brand compact />
         <div className="min-w-0 flex-1 leading-tight"><div className="truncate text-[13.5px] font-semibold">{ship?.code ?? snap?.shipment_code ?? 'Dock scanner'}</div><div className="truncate text-[11px] text-muted">{ship ? `${ship.dock} · ${ship.vehicle_no}` : user.display_name}</div></div>
         {netPill}
+        {unverified && <span title={`Signed in from this device's cache — the server could not confirm the session (${unverified}). It will re-check when signal returns.`}><Honesty kind="provisional">ID UNVERIFIED</Honesty></span>}
       </header>
 
       {(conflicts.length > 0 || (!net.online && snapLeftMin !== null && snapLeftMin < 30)) && (
