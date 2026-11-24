@@ -68,8 +68,12 @@ export default function Dispatch() {
   const { can } = useAuth()
   const { data: ships } = useGet<{ items: ShipView[] }>('/shipments', { refetchInterval: 6000 })
   const { data: orders } = useGet<{ items: Order[] }>('/orders')
-  const [shipId, setShipId] = useState('shp_0003')
-  const ship = ships?.items.find(s => s.id === shipId)
+  const [picked, setShipId] = useState<string | null>(null)
+  const shipId = picked ?? ships?.items.find(s => s.status === 'OPEN')?.id ?? ships?.items[0]?.id ?? ''
+  const listed = ships?.items.find(s => s.id === shipId)
+  // The list omits scan history (v0.2); the detail carries it. Fall back to the list row while loading.
+  const { data: detail } = useGet<ShipView>(shipId ? `/shipments/${shipId}` : null, { refetchInterval: 6000 })
+  const ship = detail?.id === shipId ? detail : listed
   const { data: pkgs } = useGet<{ items: PkgView[] }>('/packages')
   const [decision, setDecision] = useState<ScanDecision | null>(null)
   const [recheck, setRecheck] = useState<PkgView | null>(null)
@@ -171,14 +175,14 @@ export default function Dispatch() {
           <Card>
             <CardHeader eyebrow="Persisted" title={`Scan log · ${ship?.code ?? ''}`} />
             <ul className="max-h-80 divide-y divide-line overflow-y-auto">
-              {ship?.scans.map(s => (
+              {ship?.scans?.map(s => (
                 <li key={s.scan_id + s.decided_at}><button onClick={() => setDecision(s)} className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-surface-2">
                   <Status value={s.decision} /><Mono className="w-20">{s.package_label ?? '?'}</Mono>
                   <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted">{s.reasons.map(r => r.code).join(' · ') || 'all gates passed'}</span>
                   <span className="num text-[11px] text-muted">{fmtTime(s.decided_at)}</span>
                 </button></li>
               ))}
-              {!ship?.scans.length && <li className="p-4 text-[13px] text-muted">No attempts yet.</li>}
+              {!ship?.scans?.length && <li className="p-4 text-[13px] text-muted">No attempts yet.</li>}
             </ul>
           </Card>
         </div>

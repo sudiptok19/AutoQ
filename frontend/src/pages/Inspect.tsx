@@ -26,14 +26,14 @@ function VerdictPanel({ insp, unit }: { insp: Inspection; unit?: Unit }) {
         <div className="space-y-3">
           <div>
             <div className="eyebrow mb-1">Image quality gate</div>
-            <Metric label="Sharpness" value={insp.quality_gate.blur_laplacian_var} ok={!insp.quality_gate.failures.includes('IMAGE_QUALITY_BLUR')} rule={`≥ ${insp.quality_gate.thresholds.blur_min}`} />
+            <Metric label="Sharpness" value={Math.round(insp.quality_gate.blur_laplacian_var * 10) / 10} ok={!insp.quality_gate.failures.includes('IMAGE_QUALITY_BLUR')} rule={`≥ ${insp.quality_gate.thresholds.blur_min}`} />
             <Metric label="Glare" value={`${(insp.quality_gate.glare_ratio * 100).toFixed(1)}%`} ok={!insp.quality_gate.failures.includes('IMAGE_QUALITY_GLARE')} rule={`≤ ${insp.quality_gate.thresholds.glare_max * 100}%`} />
           </div>
           <div>
             <div className="eyebrow mb-1 flex items-center gap-2">Analysis · {a.method} <Mono>{a.method_version}</Mono></div>
             {a.score === null ? <div className="text-[12.5px] text-muted">Not run — quality gate or calibration failed first.</div> : <>
               <ScoreBar score={a.score} hold={a.hold_threshold} reject={a.reject_threshold} />
-              <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted"><span>Anomaly score <Mono className="text-ink">{a.score}</Mono></span><Honesty kind="not-probability" /></div>
+              <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted"><span>Anomaly score <Mono className="text-ink">{fmtScore(a.score)}</Mono></span><Honesty kind="not-probability" /></div>
               {a.threshold_tightened && <div className="mt-1 text-[11px] text-hold">Thresholds tightened by active 4M containment.</div>}
             </>}
           </div>
@@ -50,6 +50,9 @@ function VerdictPanel({ insp, unit }: { insp: Inspection; unit?: Unit }) {
     </div>
   )
 }
+
+/** Scores are model outputs in [0,1]; four decimals is the meaningful precision for display. */
+const fmtScore = (n: number | null | undefined) => (n == null ? '—' : n.toFixed(4))
 
 export function ScoreBar({ score, hold, reject }: { score: number; hold: number; reject: number }) {
   return (
@@ -161,7 +164,7 @@ export default function Inspect() {
               <li key={i.id} className="flex items-center gap-3 px-4 py-2 text-[12.5px]">
                 <span className={cx('size-2 rounded-full')} style={{ background: toneVar[toneOf(i.verdict)] }} />
                 <Link to={`/units/${i.unit_id}`} className="hover:text-accent"><Mono>{all?.items.find(u => u.id === i.unit_id)?.serial}</Mono></Link>
-                <Mono className="text-muted">{i.analysis.score ?? '—'}</Mono>
+                <Mono className="text-muted">{fmtScore(i.analysis.score)}</Mono>
                 <span className="ml-auto text-[11px] text-muted">{i.created_by} · {ago(i.created_at)}</span>
               </li>
             ))}</ul>

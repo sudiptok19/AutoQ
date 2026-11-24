@@ -106,7 +106,7 @@ export interface SpcSeries {
   part_id: string; line_id: string; method_version: string
   baseline: { n: number; mean: number; std: number; frozen_at: string | null; status: 'READY' | 'COLLECTING' | 'LOW_VARIANCE' }
   rule: { type: 'CUSUM_UPPER'; k_sigma: number; h_sigma: number }
-  points: SpcPoint[]; alerts: { id: string; at_index: number; message: string }[]
+  points: SpcPoint[]; alerts: { id: string; at_index?: number; inspection_id?: string; status?: string; message: string }[]
 }
 
 export interface AuditEvent { id: string; seq: number; at: string; actor: string; action: string; entity_type: string; entity_id: string; reason?: string; data?: Record<string, any>; prev_hash: string; hash: string }

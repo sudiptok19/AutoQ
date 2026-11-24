@@ -19,7 +19,8 @@ function LogEventModal({ open, onClose }: { open: boolean; onClose: () => void }
   const { data: pol } = useGet<any>('/policies')
   const [cat, setCat] = useState<FourMCategory>('MACHINE')
   const [planned, setPlanned] = useState<'unplanned' | 'planned'>('unplanned')
-  const [line, setLine] = useState('line_2')
+  const [picked, setLine] = useState<string | null>(null)
+  const line = picked ?? lines?.items[0]?.id ?? ''
   const [desc, setDesc] = useState(CAT.MACHINE.example)
   const [reason, setReason] = useState('Insert chipped mid-shift; replaced by maintenance without first-off approval')
   const act = useAct(() => api.post('/four-m-events', { category: cat, planned: planned === 'planned', line_id: line, description: desc, reason }))
