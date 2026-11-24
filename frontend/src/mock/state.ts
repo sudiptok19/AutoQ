@@ -5,8 +5,7 @@
  */
 import type {
   AuditEvent, Containment, Customer, FourMEvent, Heat, Inspection, Line, Lot, Order, Package, Part, Passport,
-  QualityStatus, Recall, ScanDecision, SealCheck, Shipment, Supplier, User,
-} from '../api/types'
+  QualityStatus, Recall, ScanDecision, SealCheck, Shipment, SegregationTask, Supplier, User } from '../api/types'
 import { b64url, canonicalize, fromB64url } from '../lib/canonical'
 import { newKeyPair, sha256Hex, signToken } from '../lib/token'
 
@@ -30,6 +29,7 @@ export interface MockState {
   customers: Customer[]; orders: Order[]; packages: Package[]; seal_checks: SealCheck[]; shipments: Shipment[]; scans: ScanDecision[]
   recalls: Recall[]; audit: AuditEvent[]; evidence: Record<string, string>; spc: SpcRow[]; policies: Policies; alerts_acked: string[]
   reports: any[]
+  tasks?: SegregationTask[]
   device_heads?: Record<string, { head: string; seq: number }>
 }
 
