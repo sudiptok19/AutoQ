@@ -2,9 +2,10 @@
 
 import json
 import struct
+import sys
 from dataclasses import replace
 from hashlib import sha256
-from shutil import copyfile
+from io import BytesIO
 from zlib import crc32
 
 import cv2
@@ -12,13 +13,16 @@ import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.core import errors
 from app.core.auth import Principal, current_principal
 from app.core.errors import ApiError
 from app.db.session import get_db
+from app.features.component_vision._jpeg import jpeg_frame
 from app.features.component_vision.router import router
 from app.features.component_vision.service import (
+    MAX_DECODED_SIDE,
     MAX_IMAGE_BYTES,
     METHOD_VERSION,
     evaluate,
@@ -130,30 +134,89 @@ def test_missing_or_unusable_calibration(golden, profile, condition):
     assert evidence.analysis["method_version"] == METHOD_VERSION
 
 
-def test_physical_inspection_report_records_unadmitted_golden(tmp_path):
+def test_physical_inspection_report_evaluates_original_captures(tmp_path):
     source = ROOT / "fixtures" / "images" / "inspection" / "manifest.json"
-    fixed_files = {"golden_01.jpg", "good_01.jpg", "defect_01.jpg", "blurry_01.jpg", "glare_01.jpg", "misaligned_01.jpg"}
-    images = [row for row in json.loads(source.read_text(encoding="utf-8"))["images"] if row["file"] in fixed_files]
-    for row in images:
-        copyfile(source.parent / row["file"], tmp_path / row["file"])
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"images": images}), encoding="utf-8")
-    report = evaluate_set("inspection", manifest, tmp_path / "report.json")
+    images = json.loads(source.read_text(encoding="utf-8"))["images"]
+    report = evaluate_set("inspection", source, tmp_path / "report.json")
 
-    assert report["comparison_status"] == "BLOCKED_REFERENCE"
+    assert report["comparison_status"] == "COMPLETED"
     reference = report["reference"]
-    assert reference["sha256"] == sha256((manifest.parent / reference["file"]).read_bytes()).hexdigest()
-    assert reference["input_metadata"]["jpeg_bytes_after_last_eoi_sequence"] > 0
-    assert reference["admission"]["error"]["message"] == "JPEG is missing its end-of-image marker"
-    assert report["totals"]["n"] == report["totals"]["not_evaluated"] == len(fixed_files) - 1
-    assert report["totals"]["unverifiable"] == 0
-    for result in report["results"]:
-        assert result["evidence_source"] == "PRERECORDED_EVAL"
-        assert result["outcome"] == "NOT_EVALUATED" and result["score"] is None
-        assert result["standalone_assessment"]["error"]["code"] == "INVALID_IMAGE"
+    assert reference["admission"]["passed"] is True
+    assert reference["self_check"]["score"] == 0
+    assert reference["self_check"]["artifacts"] == {"aligned_png": True, "diff_png": True}
+    assert report["totals"]["n"] == len(images) - 1
+    assert report["totals"]["not_evaluated"] == 0
+    for row in [reference, *report["results"]]:
+        original = (source.parent / row["file"]).read_bytes()
+        assert row["sha256"] == sha256(original).hexdigest()
+        assert row["input_metadata"]["jpeg_trailing_bytes"] > 0
+        assert row["evidence_source"] == "PRERECORDED_EVAL"
+
+    results = {row["file"]: row for row in report["results"]}
+    good = results["good_02.jpg"]
+    defect = results["defect_02.jpg"]
+    assert good["outcome"] == "ACCEPTED" and defect["outcome"] == "FLAGGED"
+    assert good["score"] < defect["score"]
+    for name, reason in {"blurry_01.jpg": "IMAGE_QUALITY_BLUR", "misaligned_01.jpg": "ALIGNMENT_FAILED"}.items():
+        row = results[name]
+        assert row["outcome"] == "UNVERIFIABLE" and row["score"] is None
+        assert reason in row["reasons"]
+        assert row["artifacts"] == {"aligned_png": False, "diff_png": False}
 
     with pytest.raises(ApiError, match="Invalid inspection threshold min_inliers"):
-        inspection_method((manifest.parent / reference["file"]).read_bytes(), {"min_inliers": 0})
+        inspection_method((source.parent / reference["file"]).read_bytes(), {"min_inliers": 0})
+
+
+def test_primary_jpeg_can_contain_a_thumbnail_and_trailing_metadata(part, profile):
+    original = (ROOT / "fixtures" / "images" / "inspection" / "golden_01.jpg").read_bytes()
+    frame = jpeg_frame(original)
+    primary = original[:frame.end]
+    assert original[frame.end:] and not original.endswith(b"\xff\xd9")
+    assert quality_gate(original, profile.thresholds) == quality_gate(primary, profile.thresholds)
+
+    thumbnail = encode(cv2.resize(part, (32, 24)), ".jpg")
+    app_segment = b"\xff\xe3" + struct.pack(">H", len(thumbnail) + 2) + thumbnail
+    nested = primary[:2] + app_segment + primary[2:]
+    jpeg = nested + b"vendor trailer with marker bytes \xff\xd9"
+    assert jpeg_frame(jpeg).end == len(nested)
+    assert quality_gate(jpeg, profile.thresholds) == quality_gate(primary, profile.thresholds)
+    with pytest.raises(ApiError) as caught:
+        quality_gate(nested[:-2], profile.thresholds)
+    assert (caught.value.status, caught.value.code) == (422, "INVALID_IMAGE")
+
+
+@pytest.mark.parametrize("percent_of_file", [50, 95])
+def test_strict_decoder_rejects_premature_eoi_in_real_entropy_stream(percent_of_file):
+    original = (ROOT / "fixtures" / "images" / "inspection" / "golden_01.jpg").read_bytes()
+    frame = jpeg_frame(original)
+    shortened = original[:frame.end * percent_of_file // 100].rstrip(b"\xff")
+    corrupt = shortened + b"\xff\xd9" + original[frame.end:]
+    assert jpeg_frame(corrupt).end == len(shortened) + 2
+    with pytest.raises(ApiError, match="JPEG scan could not be decoded completely") as caught:
+        quality_gate(corrupt, {})
+    assert (caught.value.status, caught.value.code) == (422, "INVALID_IMAGE")
+
+
+def test_missing_strict_decoder_is_explicit_and_only_affects_jpeg(part, golden, profile, monkeypatch):
+    jpeg = encode(part, ".jpg")
+    jpeg_profile = replace(profile, reference_sha256=sha256(jpeg).hexdigest())
+    monkeypatch.setitem(sys.modules, "simplejpeg", None)
+    assert quality_gate(golden, {})["passed"]
+    with pytest.raises(ApiError) as capture_error:
+        quality_gate(jpeg, {})
+    with pytest.raises(ApiError) as reference_error:
+        evaluate(golden, jpeg, jpeg_profile, evidence_source=SOURCE)
+    for error in (capture_error.value, reference_error.value):
+        assert (error.status, error.code) == (503, "JPEG_DECODER_UNAVAILABLE")
+        assert "simplejpeg" in error.details["remediation"]
+
+
+def test_cmyk_jpeg_remains_supported(part):
+    data = BytesIO()
+    Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).convert("CMYK").save(data, format="JPEG")
+    gate = quality_gate(data.getvalue(), {})
+    assert gate["passed"]
+    assert (gate["width"], gate["height"]) == (640, 480)
 
 
 def test_excessive_translation_gives_alignment_failure(part, golden, profile):
@@ -214,7 +277,10 @@ def test_records_applied_thresholds_and_reports_hold_evidence(part, golden, prof
     assert result.analysis["threshold_tightened"] is True
 
 
-@pytest.mark.parametrize("condition", ["garbage", "missing_jpeg_eoi", "truncated_png", "oversize_bytes", "oversize_edge"])
+@pytest.mark.parametrize("condition", [
+    "garbage", "missing_jpeg_eoi", "early_jpeg_eoi", "invalid_jpeg_segment",
+    "truncated_png", "oversize_bytes", "oversize_edge",
+])
 def test_invalid_and_oversize_image_bytes_are_typed_errors(part, golden, profile, condition):
     if condition == "garbage":
         image = b"not a JPEG or PNG"
@@ -223,6 +289,14 @@ def test_invalid_and_oversize_image_bytes_are_typed_errors(part, golden, profile
         assert validate_reference(image, profile.thresholds) == "image/jpeg"
         assert image.endswith(b"\xff\xd9")
         image = image[:-2]
+    elif condition == "early_jpeg_eoi":
+        image = encode(part, ".jpg")
+        scan = image.index(b"\xff\xda") + 2
+        end_of_header = scan + int.from_bytes(image[scan:scan + 2], "big")
+        image = image[:end_of_header + 3] + b"\xff\xd9"
+    elif condition == "invalid_jpeg_segment":
+        image = encode(part, ".jpg")
+        image = image[:2] + b"\xff\xe3\xff\xff" + image[2:]
     elif condition == "truncated_png":
         image = golden[:-12]
     elif condition == "oversize_bytes":
@@ -231,10 +305,66 @@ def test_invalid_and_oversize_image_bytes_are_typed_errors(part, golden, profile
         image = encode(np.zeros((5, 8193), dtype=np.uint8))
     with pytest.raises(ApiError) as caught:
         evaluate(image, golden, profile, evidence_source=SOURCE)
-    assert caught.value.status == (413 if condition.startswith("oversize") else 422)
+    assert caught.value.status == 422
     assert caught.value.code == "INVALID_IMAGE"
     assert caught.value.details["component"] == "component_vision"
     assert caught.value.details["remediation"]
+
+
+def test_ordinary_jpeg_quality_uses_legacy_capture_pixels(part):
+    image = encode(cv2.resize(part, (2600, 1950), interpolation=cv2.INTER_LINEAR), ".jpg")
+    decoded = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+    gray = cv2.cvtColor(decoded, cv2.COLOR_BGR2GRAY)
+    measured = cv2.resize(gray, (1280, 960), interpolation=cv2.INTER_AREA)
+    expected_blur = float(cv2.meanStdDev(cv2.Laplacian(measured, cv2.CV_32F, ksize=1))[1][0, 0] ** 2)
+    expected_glare = cv2.countNonZero(cv2.inRange(gray, 250, 255)) / gray.size
+    gate = quality_gate(image, {})
+    assert (gate["width"], gate["height"]) == (2600, 1950)
+    assert gate["blur_laplacian_var"] == expected_blur
+    assert gate["glare_ratio"] == expected_glare
+
+
+def test_low_resolution_jpeg_stops_before_alignment(part, profile):
+    small = encode(cv2.resize(part, (256, 192), interpolation=cv2.INTER_AREA), ".jpg")
+    evidence = evaluate(small, b"unused reference", profile, evidence_source=SOURCE)
+    check_unavailable(evidence, "IMAGE_QUALITY_RESOLUTION")
+    assert (evidence.quality_gate["width"], evidence.quality_gate["height"]) == (256, 192)
+
+
+def test_large_jpeg_is_decoded_at_bounded_scale_and_uses_oriented_capture_dimensions(monkeypatch):
+    height, width = 7999, 8001
+    image = encode(np.full((height, width), 255, dtype=np.uint8), ".jpg")
+    exif = Image.Exif()
+    exif[274] = 6
+    metadata = exif.tobytes()
+    image = image[:2] + b"\xff\xe1" + struct.pack(">H", len(metadata) + 2) + metadata + image[2:]
+    imdecode = cv2.imdecode
+
+    def bounded_decode(buffer, flags):
+        assert flags == cv2.IMREAD_REDUCED_COLOR_4 | cv2.IMREAD_IGNORE_ORIENTATION
+        pixels = imdecode(buffer, flags)
+        assert max(pixels.shape[:2]) <= MAX_DECODED_SIDE
+        return pixels
+
+    monkeypatch.setattr(cv2, "imdecode", bounded_decode)
+    gate = quality_gate(image, {"min_w": 7000, "min_h": 8000})
+    assert (gate["width"], gate["height"]) == (height, width)
+    assert gate["glare_ratio"] == 1.0
+    assert gate["failures"] == ["IMAGE_QUALITY_BLUR", "IMAGE_QUALITY_GLARE"]
+
+
+def test_large_opaque_png_and_jpeg_over_pixel_caps_do_not_reach_decoder(monkeypatch):
+    jpeg = encode(np.zeros((8000, 8001), dtype=np.uint8), ".jpg")
+    png = encode(np.zeros((4800, 5001), dtype=np.uint8))
+
+    def reject_decode(*_):
+        pytest.fail("Oversized capture reached the native decoder")
+
+    monkeypatch.setattr(cv2, "imdecode", reject_decode)
+    for image in (jpeg, png):
+        with pytest.raises(ApiError, match="dimensions exceed the supported limits") as caught:
+            quality_gate(image, {})
+        assert (caught.value.status, caught.value.code) == (422, "INVALID_IMAGE")
 
 
 def test_png_transparency_cannot_supply_hidden_inspection_pixels(part, golden, profile):
@@ -331,7 +461,7 @@ def test_profile_list_requires_authentication_and_allows_operator(profile):
 def test_golden_upload_passes_validated_bytes_to_ports_and_creates_uncalibrated_revision(part, profile, role):
     fake = FakeProfilePorts(profile)
     principal = Principal("quality_1", "quality", "Quality", (role,))
-    jpeg = encode(part, ".jpg")
+    jpeg = encode(part, ".jpg") + b"vendor trailer"
     with profile_client(fake, principal) as client:
         response = client.post(f"{API}/{profile.id}/golden", files={"image": ("golden.jpg", jpeg, "image/jpeg")})
     assert response.status_code == 200, response.json()

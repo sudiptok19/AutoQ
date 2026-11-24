@@ -11,13 +11,17 @@ from PIL import Image, ImageOps
 from skimage.metrics import structural_similarity
 
 from app.core.errors import ApiError
+from app.features.component_vision._jpeg import JpegDecoderUnavailable, decode_jpeg, jpeg_frame
 from app.ports import SealProfile
 
 METHOD_VERSION = "seal-orb-ssim-0.2"
 EVIDENCE_SOURCES = frozenset({"LIVE_CAPTURE", "PRERECORDED_EVAL", "SYNTHETIC_TEST"})
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-MAX_IMAGE_PIXELS = 24_000_000
+MAX_IMAGE_PIXELS = 64_000_000
+MAX_FULL_DECODE_PIXELS = 24_000_000
+MAX_PNG_PIXELS = MAX_FULL_DECODE_PIXELS
 MAX_IMAGE_SIDE = 8192
+MAX_DECODED_SIDE = 2048
 WORKING_SIDE = 960
 MIN_LONG_SIDE, MIN_SHORT_SIDE = 320, 240
 MAX_DARK_RATIO = 0.65
@@ -50,6 +54,12 @@ class SealEvidence:
     evidence_source: str | None = None
 
 
+@dataclass(frozen=True)
+class _Image:
+    gray: np.ndarray
+    original_size: tuple[int, int]  # width, height after EXIF orientation
+
+
 def validate_evidence_source(evidence_source: str | None) -> None:
     if evidence_source is not None and (not isinstance(evidence_source, str) or evidence_source not in EVIDENCE_SOURCES):
         raise ApiError(422, "EVIDENCE_SOURCE_INVALID", "The seal evidence source is invalid.",
@@ -62,42 +72,48 @@ def _invalid_image(which: str) -> ApiError:
                     {"component": "seal_vision", "image": which, "remediation": "Capture a new JPEG or PNG seal image."})
 
 
-def _decode(data: bytes, which: str) -> np.ndarray:
+def _decode(data: bytes, which: str) -> _Image:
     if not data or len(data) > MAX_IMAGE_BYTES:
         raise _invalid_image(which)
     try:
-        with Image.open(BytesIO(data), formats=("JPEG", "PNG")) as source:
+        if data.startswith(b"\xff\xd8"):
+            frame = jpeg_frame(data)
+            pixels = frame.width * frame.height
+            if max(frame.width, frame.height) > MAX_IMAGE_SIDE or pixels > MAX_IMAGE_PIXELS:
+                raise _invalid_image(which)
+            # Keep the original sampling path for previously supported captures.
+            max_edge = MAX_DECODED_SIDE if pixels > MAX_FULL_DECODE_PIXELS else None
+            gray, original_size = decode_jpeg(data, frame, max_edge=max_edge, grayscale=True)
+            return _Image(gray, original_size)
+        with Image.open(BytesIO(data), formats=("PNG",)) as source:
             width, height = source.size
-            if max(width, height) > MAX_IMAGE_SIDE or width * height > MAX_IMAGE_PIXELS:
+            if (max(width, height) > MAX_IMAGE_SIDE or width * height > MAX_PNG_PIXELS
+                    or not data.endswith(PNG_END) or getattr(source, "is_animated", False)):
                 raise _invalid_image(which)
-            if source.format == "PNG":
-                if not data.endswith(PNG_END) or getattr(source, "is_animated", False):
-                    raise _invalid_image(which)
-                source.verify()
-            elif not data.endswith(b"\xff\xd9"):
-                raise _invalid_image(which)
-        with Image.open(BytesIO(data), formats=("JPEG", "PNG")) as source:
+            source.verify()
+        with Image.open(BytesIO(data), formats=("PNG",)) as source:
             oriented = ImageOps.exif_transpose(source)
             if "A" in oriented.getbands() or "transparency" in oriented.info:
                 if oriented.convert("RGBA").getchannel("A").getextrema() != (255, 255):
                     raise _invalid_image(which)
-            return np.asarray(oriented.convert("L"))
+            return _Image(np.asarray(oriented.convert("L")), oriented.size)
+    except JpegDecoderUnavailable as exc:
+        raise ApiError(503, "JPEG_DECODER_UNAVAILABLE", "JPEG validation is unavailable",
+                       {"component": "seal_vision", "remediation": "Install simplejpeg==1.9.0 in the backend environment and retry."}) from exc
     except (OSError, ValueError, SyntaxError, EOFError, StructError, Image.DecompressionBombError) as exc:
         raise _invalid_image(which) from exc
 
 
-def _resize(gray: np.ndarray, max_side: int) -> np.ndarray:
-    height, width = gray.shape
-    if max(width, height) <= max_side:
-        return gray
-    scale = max_side / max(width, height)
+def _resize(gray: np.ndarray, original_size: tuple[int, int], max_side: int) -> np.ndarray:
+    width, height = original_size
+    scale = min(1, max_side / max(width, height))
     size = (max(1, round(width * scale)), max(1, round(height * scale)))
-    return cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
+    return gray if gray.shape == size[::-1] else cv2.resize(gray, size, interpolation=cv2.INTER_AREA)
 
 
-def _gate(gray: np.ndarray, profile: SealProfile) -> dict:
-    height, width = gray.shape
-    measured = _resize(gray, 640)
+def _gate(image: _Image, profile: SealProfile) -> dict:
+    width, height = image.original_size
+    measured = _resize(image.gray, image.original_size, 640)
     blur = float(cv2.Laplacian(measured, cv2.CV_64F).var())
     glare = float(np.mean(measured >= 250))
     dark = float(np.mean(measured <= 24))
@@ -129,7 +145,7 @@ def _validate_profile(profile: SealProfile) -> None:
 
 
 def _seam_region(profile: SealProfile, original: tuple[int, int], resized: tuple[int, int]) -> tuple[slice, slice] | None:
-    height, width = original
+    width, height = original
     fit_h, fit_w = resized
     if profile.roi is None:
         return slice(0, fit_h), slice(0, fit_w)
@@ -150,18 +166,24 @@ def _features(gray: np.ndarray, mask: np.ndarray | None = None) -> tuple[tuple, 
     return cv2.ORB_create(nfeatures=2200, fastThreshold=12).detectAndCompute(gray, mask)
 
 
-def _supported(points: np.ndarray, shape: tuple[int, int], seam: tuple[slice, slice] | None = None,
-               *, surround: bool = False) -> bool:
+def _support_failure(points: np.ndarray, shape: tuple[int, int], seam: tuple[slice, slice] | None = None,
+                     *, surround: bool = False) -> str | None:
     height, width = shape
     hull = cv2.convexHull(points)
-    if cv2.contourArea(hull) < 0.04 * width * height or np.any(np.ptp(points, axis=0) < (0.20 * width, 0.15 * height)):
-        return False
-    if seam is None:
-        return True
-    rows, cols = seam
-    center = ((cols.start + cols.stop) / 2, (rows.start + rows.stop) / 2)
-    allowance = 0 if surround else 0.10 * min(width, height)
-    return cv2.pointPolygonTest(hull, center, True) >= -allowance
+    if cv2.contourArea(hull) < 0.04 * width * height:
+        return "INLIER_HULL_AREA"
+    x_span, y_span = np.ptp(points, axis=0).tolist()
+    if x_span < 0.20 * width:
+        return "INLIER_HORIZONTAL_SPAN"
+    if y_span < 0.15 * height:
+        return "INLIER_VERTICAL_SPAN"
+    if seam is not None:
+        rows, cols = seam
+        center = ((cols.start + cols.stop) / 2, (rows.start + rows.stop) / 2)
+        allowance = 0 if surround else 0.10 * min(width, height)
+        if cv2.pointPolygonTest(hull, center, True) < -allowance:
+            return "SEAM_CENTER_OUTSIDE_INLIER_HULL"
+    return None
 
 
 def _reject(gate: dict, code: str) -> dict:
@@ -171,19 +193,19 @@ def _reject(gate: dict, code: str) -> dict:
 def assess_reference(reference: bytes, profile: SealProfile, *, evidence_source: str | None = None) -> SealReference:
     validate_evidence_source(evidence_source)
     _validate_profile(profile)
-    gray = _decode(reference, "reference")
-    gate = _gate(gray, profile)
+    image = _decode(reference, "reference")
+    gate = _gate(image, profile)
     count = 0
     if gate["passed"]:
-        resized = _resize(gray, WORKING_SIDE)
-        seam = _seam_region(profile, gray.shape, resized.shape)
+        resized = _resize(image.gray, image.original_size, WORKING_SIDE)
+        seam = _seam_region(profile, image.original_size, resized.shape)
         if seam is None:
             gate = _reject(gate, "REGISTRATION_FAILED")
         else:
             keypoints, _ = _features(resized)
             count = len(keypoints)
             points = np.float32([point.pt for point in keypoints])
-            if count < profile.min_inliers or not _supported(points, resized.shape, seam) or float(resized[seam].std()) < 12:
+            if count < profile.min_inliers or _support_failure(points, resized.shape, seam) or float(resized[seam].std()) < 12:
                 gate = _reject(gate, "TOO_FEW_KEYPOINTS")
     return SealReference(gate, count, gate["passed"], list(gate["failures"]), evidence_source)
 
@@ -250,8 +272,9 @@ def _plausible(transform: np.ndarray, src_shape: tuple[int, int], dst_shape: tup
 def _register(src: np.ndarray, dst: np.ndarray, probe_shape: tuple[int, int], ref_shape: tuple[int, int],
               seam: tuple[slice, slice], min_inliers: int, metrics: dict, *,
               surrounding: bool = False, inferred_seam: bool = False) -> np.ndarray | None:
-    metrics.update(good_matches=len(src), inliers=0, inlier_ratio=0.0)
+    metrics.update(good_matches=len(src), inliers=0, inlier_ratio=0.0, registration_failure=None)
     if len(src) < min_inliers:
+        metrics["registration_failure"] = "TOO_FEW_MATCHES"
         return None
     # Feature density on the printed tape can exceed that of the entire box.
     # Limit the influence of any one image region in the fit.
@@ -268,24 +291,37 @@ def _register(src: np.ndarray, dst: np.ndarray, probe_shape: tuple[int, int], re
     try:
         transform, mask = cv2.findHomography(src[fit_indices], dst[fit_indices], cv2.RANSAC, 3.0)
     except cv2.error:
+        metrics["registration_failure"] = "INVALID_HOMOGRAPHY"
         return None
     if transform is None or mask is None or not _plausible(transform, probe_shape, ref_shape):
+        metrics["registration_failure"] = "INVALID_HOMOGRAPHY"
         return None
     aligned = cv2.perspectiveTransform(src[:, None, :], transform).reshape(-1, 2)
     inlier_mask = np.linalg.norm(aligned - dst, axis=1) <= 3.0
     inliers = int(inlier_mask.sum())
     inlier_ratio = inliers / len(src)
     metrics.update(inliers=inliers, inlier_ratio=round(inlier_ratio, 3))
-    if inliers < min_inliers or inlier_ratio < MIN_INLIER_RATIO:
+    if inliers < min_inliers:
+        metrics["registration_failure"] = "TOO_FEW_INLIERS"
+        return None
+    if inlier_ratio < MIN_INLIER_RATIO:
+        metrics["registration_failure"] = "LOW_INLIER_RATIO"
         return None
     ref_inliers = dst[inlier_mask]
-    if not _supported(src[inlier_mask], probe_shape) or not _supported(ref_inliers, ref_shape, seam, surround=surrounding):
+    probe_failure = _support_failure(src[inlier_mask], probe_shape)
+    if probe_failure is not None:
+        metrics["registration_failure"] = f"PROBE_{probe_failure}"
+        return None
+    ref_failure = _support_failure(ref_inliers, ref_shape, seam, surround=surrounding)
+    if ref_failure is not None:
+        metrics["registration_failure"] = f"REFERENCE_{ref_failure}"
         return None
     if inferred_seam:
         # Without an explicit ROI, features on opposing ends of a long tape
         # can escape the central exclusion mask. Demand broad support in both axes.
         low, high = np.percentile(ref_inliers, [5, 95], axis=0)
         if np.any(high - low < (0.45 * ref_w, 0.45 * ref_h)):
+            metrics["registration_failure"] = "OUTER_FRAME_INLIER_SPAN"
             return None
     return transform
 
@@ -328,14 +364,16 @@ def _png(image: np.ndarray) -> bytes:
 def compare(reference: bytes, probe: bytes, profile: SealProfile, *, evidence_source: str | None = None) -> SealEvidence:
     validate_evidence_source(evidence_source)
     _validate_profile(profile)
-    probe_gray = _decode(probe, "probe")
-    ref_gray = _decode(reference, "reference")
-    gate = _gate(probe_gray, profile)
-    ref_gate = _gate(ref_gray, profile)
+    probe_image = _decode(probe, "probe")
+    ref_image = _decode(reference, "reference")
+    gate = _gate(probe_image, profile)
+    ref_gate = _gate(ref_image, profile)
     gate = {**gate, "reference": ref_gate, "passed": gate["passed"] and ref_gate["passed"],
             "failures": list(dict.fromkeys([*gate["failures"], *ref_gate["failures"]]))}
     regional_threshold = max(0.0, profile.suspicious_ssim - 0.15)
     metrics = {"keypoints_ref": 0, "keypoints_probe": 0, "good_matches": 0, "inliers": 0, "inlier_ratio": 0.0, "registration_basis": None,
+               "registration_failure": None, "anchor_good_matches": None, "anchor_inliers": None,
+               "anchor_registration_failure": None,
                "surrounding_support": None, "center_shift_ratio": None, "frame_shift_ratio": None,
                "ssim": None, "min_region_ssim": None, "seam_coverage": None,
                "thresholds": {"min_inliers": profile.min_inliers, "intact_ssim": profile.intact_ssim,
@@ -352,9 +390,11 @@ def compare(reference: bytes, probe: bytes, profile: SealProfile, *, evidence_so
         return failed("Capture a sharper, evenly lit seal image at the required resolution." if ref_gate["passed"]
                       else "The enrolled seal image failed the quality gate and requires re-enrolment.")
 
-    ref, candidate = _resize(ref_gray, WORKING_SIDE), _resize(probe_gray, WORKING_SIDE)
-    seam = _seam_region(profile, ref_gray.shape, ref.shape)
+    ref = _resize(ref_image.gray, ref_image.original_size, WORKING_SIDE)
+    candidate = _resize(probe_image.gray, probe_image.original_size, WORKING_SIDE)
+    seam = _seam_region(profile, ref_image.original_size, ref.shape)
     if seam is None:
+        metrics["registration_failure"] = "INVALID_REFERENCE_ROI"
         return failed("The enrolled seam region is invalid and requires re-enrolment.", "REGISTRATION_FAILED")
     ref_crop = ref[seam]
     ref_keys, ref_descriptors = _features(ref)
@@ -373,8 +413,17 @@ def compare(reference: bytes, probe: bytes, profile: SealProfile, *, evidence_so
     if (ref_anchor_descriptors is not None and probe_anchor_descriptors is not None
             and min(len(ref_anchors), len(probe_anchors)) >= profile.min_inliers):
         src, dst = _match(ref_anchors, ref_anchor_descriptors, probe_anchors, probe_anchor_descriptors)
-        transform = _register(src, dst, candidate.shape, ref.shape, seam, profile.min_inliers, metrics,
+        anchor_metrics = {}
+        transform = _register(src, dst, candidate.shape, ref.shape, seam, profile.min_inliers, anchor_metrics,
                               surrounding=True, inferred_seam=excluded is None)
+        anchor_failure = anchor_metrics["registration_failure"]
+        metrics.update(anchor_good_matches=anchor_metrics["good_matches"], anchor_registration_failure=anchor_failure)
+        if anchor_failure not in ("TOO_FEW_MATCHES", "INVALID_HOMOGRAPHY"):
+            metrics["anchor_inliers"] = anchor_metrics["inliers"]
+        if transform is not None:
+            metrics.update(anchor_metrics)
+    else:
+        metrics["anchor_registration_failure"] = "TOO_FEW_KEYPOINTS"
     surrounding_support = transform is not None
     metrics["surrounding_support"] = surrounding_support
     if transform is not None:
@@ -397,8 +446,10 @@ def compare(reference: bytes, probe: bytes, profile: SealProfile, *, evidence_so
     fraction = float(valid[interior].mean())
     metrics["seam_coverage"] = round(fraction, 3)
     if fraction < MIN_SEAM_COVERAGE:
+        metrics["registration_failure"] = "SEAM_COVERAGE"
         return failed("Recapture the image with the entire enrolled seam in view.", "REGISTRATION_FAILED")
     if not surrounding_support and (center_shift > MAX_UNANCHORED_CENTER_SHIFT or frame_shift > MAX_UNANCHORED_FRAME_SHIFT):
+        metrics["registration_failure"] = "UNANCHORED_FRAME_SHIFT"
         return failed("Recapture with more of the surrounding box visible so the seal alignment can be verified.", "REGISTRATION_FAILED")
     # Only average SSIM windows fully supported by real probe pixels and inside the seam.
     valid[:SSIM_MARGIN] = valid[-SSIM_MARGIN:] = False

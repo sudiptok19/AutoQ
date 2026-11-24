@@ -14,16 +14,19 @@ from numpy.typing import NDArray
 
 from app.core.errors import ApiError
 from app.core.storage import sniff
+from app.features.component_vision._jpeg import InvalidJpeg, JpegDecoderUnavailable, decode_jpeg, jpeg_frame
 from app.ports import VisionProfile
 
 METHOD_VERSION = "gd-0.3"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
-_MAX_PIXELS = 24_000_000
-_MAX_EDGE = 8192
+MAX_IMAGE_PIXELS = 64_000_000
+MAX_PNG_PIXELS = 24_000_000
+MAX_IMAGE_SIDE = 8192
+MAX_DECODED_SIDE = 2048
+_MAX_FULL_DECODE_PIXELS = 24_000_000
 _WORK_EDGE = 1280
 _MEDIA_TYPES = {"image/jpeg", "image/png"}
 _SOURCES = {"LIVE_CAPTURE", "PRERECORDED_EVAL", "SYNTHETIC_TEST"}
-_JPEG_SOF = set(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
 
 Image = NDArray[np.uint8]
 
@@ -56,11 +59,11 @@ class _Registration:
     roi: tuple[float, float, float, float]
 
 
-def _image_error(message: str, *, status: int = 422, reasons: list[str] | None = None) -> ApiError:
+def _image_error(message: str, *, reasons: list[str] | None = None) -> ApiError:
     details = {"component": "component_vision", "remediation": "Capture a new JPEG or PNG within the size limit."}
     if reasons:
         details["reason_codes"] = reasons
-    return ApiError(status, "INVALID_IMAGE", message, details)
+    return ApiError(422, "INVALID_IMAGE", message, details)
 
 
 def _profile_error(message: str) -> ApiError:
@@ -79,33 +82,11 @@ def _media_type(data: bytes) -> str:
     if not isinstance(data, bytes) or not data:
         raise _image_error("The image must contain JPEG or PNG bytes")
     if len(data) > MAX_IMAGE_BYTES:
-        raise _image_error("Image exceeds 10 MiB", status=413)
+        raise _image_error("Image exceeds 10 MiB")
     media_type = sniff(data)
     if media_type not in _MEDIA_TYPES:
         raise _image_error("Only JPEG and PNG images are supported")
     return media_type
-
-
-def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
-    # Some OpenCV builds recover partially received JPEGs by filling the missing pixels.
-    if not data.endswith(b"\xff\xd9"):
-        raise _image_error("JPEG is missing its end-of-image marker")
-    offset = 2  # Skip SOI. JPEG segment lengths include their own two bytes.
-    while offset < len(data) and data[offset] == 0xFF:
-        while offset < len(data) and data[offset] == 0xFF:
-            offset += 1
-        if offset + 2 >= len(data):
-            break
-        marker = data[offset]
-        offset += 1
-        length = int.from_bytes(data[offset:offset + 2], "big")
-        if marker in (0, 0xD9, 0xDA) or length < 2 or offset + length > len(data):
-            break
-        if marker in _JPEG_SOF and length >= 8:
-            height, width = struct.unpack_from(">HH", data, offset + 3)
-            return width, height
-        offset += length
-    raise _image_error("JPEG is missing a valid frame header")
 
 
 def _png_dimensions(data: bytes) -> tuple[int, int]:
@@ -125,12 +106,32 @@ def _png_dimensions(data: bytes) -> tuple[int, int]:
     raise _image_error("PNG must be a complete, single-frame image")
 
 
-def _decode(data: bytes) -> tuple[Image, str]:
+def _check_dimensions(width: int, height: int, max_pixels: int) -> None:
+    if min(width, height) < 1 or max(width, height) > MAX_IMAGE_SIDE or width * height > max_pixels:
+        raise _image_error("Decoded image dimensions exceed the supported limits")
+
+
+def _decode(data: bytes) -> tuple[Image, str, tuple[int, int]]:
     media_type = _media_type(data)
-    width, height = _png_dimensions(data) if media_type == "image/png" else _jpeg_dimensions(data)
-    if min(width, height) < 1 or max(width, height) > _MAX_EDGE or width * height > _MAX_PIXELS:
-        raise _image_error("Decoded image dimensions exceed the supported limits", status=413)
-    has_alpha = media_type == "image/png" and data[25] in (4, 6)
+    if media_type == "image/jpeg":
+        try:
+            frame = jpeg_frame(data)
+            _check_dimensions(frame.width, frame.height, MAX_IMAGE_PIXELS)
+            # Preserve the calibrated pixel path for the original admission range.
+            large = frame.width * frame.height > _MAX_FULL_DECODE_PIXELS
+            pixels, dimensions = decode_jpeg(data, frame, max_edge=MAX_DECODED_SIDE if large else None)
+        except JpegDecoderUnavailable as exc:
+            raise ApiError(503, "JPEG_DECODER_UNAVAILABLE", "JPEG validation is unavailable", {
+                "component": "component_vision",
+                "remediation": "Install simplejpeg==1.9.0 in the backend environment and retry.",
+            }) from exc
+        except InvalidJpeg as exc:
+            raise _image_error(str(exc)) from exc
+        return pixels, media_type, dimensions
+
+    width, height = _png_dimensions(data)
+    _check_dimensions(width, height, MAX_PNG_PIXELS)
+    has_alpha = data[25] in (4, 6)
     flags = cv2.IMREAD_UNCHANGED if has_alpha else cv2.IMREAD_COLOR
     try:
         pixels = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), flags)
@@ -144,7 +145,7 @@ def _decode(data: bytes) -> tuple[Image, str]:
                 pixels = (pixels >> 8).astype(np.uint8)
     except cv2.error as exc:
         raise _image_error("Image could not be decoded") from exc
-    return pixels, media_type
+    return pixels, media_type, (pixels.shape[1], pixels.shape[0])
 
 
 def _number(config: dict, key: str, default: float, lower: float, upper: float, *, integer: bool = False) -> float:
@@ -161,8 +162,8 @@ def _quality_thresholds(config: dict) -> dict:
     return {
         "blur_min": _number(config, "blur_min", 80.0, 0, 1_100_000),
         "glare_max": _number(config, "glare_max", 0.12, 0, 1),
-        "min_w": _number(config, "min_w", 320, 1, _MAX_EDGE, integer=True),
-        "min_h": _number(config, "min_h", 240, 1, _MAX_EDGE, integer=True),
+        "min_w": _number(config, "min_w", 320, 1, MAX_IMAGE_SIDE, integer=True),
+        "min_h": _number(config, "min_h", 240, 1, MAX_IMAGE_SIDE, integer=True),
     }
 
 
@@ -174,13 +175,13 @@ def _working(pixels: Image) -> Image:
     return cv2.resize(pixels, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation=cv2.INTER_AREA)
 
 
-def _quality(pixels: Image, thresholds: dict) -> dict:
-    height, width = pixels.shape[:2]
+def _quality(pixels: Image, dimensions: tuple[int, int], thresholds: dict) -> dict:
+    width, height = dimensions
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-    # Check resolution and glare at capture size, with the Laplacian bounded to the working scale.
+    # Resolution uses capture dimensions, and optical metrics use the admitted pixels.
     laplacian = cv2.Laplacian(_working(gray), cv2.CV_32F, ksize=1)
     sharpness = float(cv2.meanStdDev(laplacian)[1][0, 0] ** 2)
-    glare = cv2.countNonZero(cv2.inRange(gray, 250, 255)) / (width * height)
+    glare = cv2.countNonZero(cv2.inRange(gray, 250, 255)) / gray.size
     failures = []
     if width < thresholds["min_w"] or height < thresholds["min_h"]:
         failures.append("IMAGE_QUALITY_RESOLUTION")
@@ -195,9 +196,9 @@ def _quality(pixels: Image, thresholds: dict) -> dict:
 
 
 def quality_gate(image: bytes, thresholds: dict) -> dict:
-    """Measure JPEG/PNG quality. Dimensions refer to the decoded capture."""
-    pixels, _ = _decode(image)
-    return _quality(pixels, _quality_thresholds(thresholds))
+    """Measure JPEG/PNG quality. Dimensions refer to the full oriented capture."""
+    pixels, _, dimensions = _decode(image)
+    return _quality(pixels, dimensions, _quality_thresholds(thresholds))
 
 
 def _registration(config: dict) -> _Registration:
@@ -228,10 +229,10 @@ def _coverage(points: NDArray, shape: tuple[int, int]) -> float:
 
 def validate_reference(image: bytes, thresholds: dict, declared_media_type: str | None = None) -> str:
     """Check a golden candidate and return its detected media type, matching any supplied declaration."""
-    pixels, media_type = _decode(image)
+    pixels, media_type, dimensions = _decode(image)
     if declared_media_type is not None and declared_media_type != media_type:
         raise _image_error("The declared JPEG or PNG media type must match the uploaded image")
-    gate = _quality(pixels, _quality_thresholds(thresholds))
+    gate = _quality(pixels, dimensions, _quality_thresholds(thresholds))
     if not gate["passed"]:
         raise _image_error("Golden image did not meet the profile quality gate", reasons=gate["failures"])
     limits = _registration(thresholds)
@@ -381,7 +382,7 @@ def evaluate(
     image: bytes, reference: bytes | None, profile: VisionProfile | None, *, evidence_source: str | None = None
 ) -> VisionEvidence:
     """Run the quality gate, register the verified golden image, and measure its difference."""
-    capture, _ = _decode(image)
+    capture, _, dimensions = _decode(image)
     if profile is not None and not isinstance(profile, VisionProfile):
         raise _profile_error("The inspection profile has an invalid type")
     if evidence_source is not None and (not isinstance(evidence_source, str) or evidence_source not in _SOURCES):
@@ -391,7 +392,7 @@ def evaluate(
         })
     config = profile.thresholds if profile is not None else {}
     quality = _quality_thresholds(config)
-    gate = _quality(capture, quality)
+    gate = _quality(capture, dimensions, quality)
     hold = _number(config, "hold", 0.45, 0, 1)
     reject = _number(config, "reject", 0.70, 0, 1)
     if hold >= reject:
@@ -418,10 +419,12 @@ def evaluate(
     if sha256(reference).hexdigest() != profile.reference_sha256:
         return unavailable(["MODEL_UNCALIBRATED"], has_calibration=False)
     try:
-        golden, _ = _decode(reference)
-    except ApiError:
+        golden, _, golden_dimensions = _decode(reference)
+    except ApiError as exc:
+        if exc.code != "INVALID_IMAGE":
+            raise
         return unavailable(["MODEL_UNCALIBRATED"], has_calibration=False)
-    if not _quality(golden, quality)["passed"]:
+    if not _quality(golden, golden_dimensions, quality)["passed"]:
         return unavailable(["MODEL_UNCALIBRATED"], has_calibration=False)
     limits = _registration(config)
     golden = _working(golden)

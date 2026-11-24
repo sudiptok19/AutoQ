@@ -1,0 +1,158 @@
+{
+  "baseline": {
+    "source": {
+      "commit": "1ea34ab1fc7e0833cadd71e5d831d9c0425a9118",
+      "path": "datasets/vision_eval.json",
+      "report_version": 2
+    },
+    "sets": {
+      "inspection": {
+        "method_version": "gd-0.3",
+        "manifest_sha256": "cbc4c29f702a96572a72dc08ba0c48b20b999a0d3a46454422097fac8c63a4bf",
+        "capture_set_sha256": "ddec0f7d16292115ccbac0852ff4d39dd77ce7bd86495e0cc211f1c705af501b",
+        "thresholds": {
+          "min_w": 320,
+          "min_h": 240,
+          "blur_min": 80.0,
+          "glare_max": 0.12,
+          "min_inliers": 24,
+          "min_inlier_ratio": 0.55,
+          "min_overlap": 0.82,
+          "min_coverage": 0.12,
+          "hold": 0.45,
+          "reject": 0.7,
+          "roi": [
+            0,
+            0,
+            1,
+            1
+          ]
+        },
+        "input_limits": {
+          "max_bytes": 10485760,
+          "max_pixels": 24000000,
+          "max_side": 8192
+        },
+        "comparison_status": "BLOCKED_REFERENCE",
+        "reference_admission": {
+          "check": "GOLDEN_ADMISSION",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "JPEG is missing its end-of-image marker",
+            "status": 422,
+            "details": {
+              "component": "component_vision",
+              "remediation": "Capture a new JPEG or PNG within the size limit."
+            }
+          }
+        },
+        "totals": {
+          "n": 11,
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 0,
+          "not_evaluated": 11,
+          "false_accepts": 0,
+          "false_rejects": 0
+        },
+        "reference_sha256": "3cdcd82e8d4eadfcb46c50d0848aab0442cc91c3bf5a08317a5caa852d941706"
+      },
+      "seal": {
+        "method_version": "seal-orb-ssim-0.2",
+        "manifest_sha256": "6c23d15e244673ce41517bb977fbfcae4cebc808a7010a7dae7b2ea0dea7395c",
+        "capture_set_sha256": "1c52cca8bf189d93480fd895d3e71aa61dc2f1b2b85eb7bf64c1bfee379ede41",
+        "thresholds": {
+          "min_inliers": 40,
+          "intact_ssim": 0.72,
+          "suspicious_ssim": 0.6,
+          "roi": null,
+          "blur_min": 80.0,
+          "glare_max": 0.12
+        },
+        "input_limits": {
+          "max_bytes": 10485760,
+          "max_pixels": 24000000,
+          "max_side": 8192
+        },
+        "comparison_status": "BLOCKED_REFERENCE",
+        "reference_admission": {
+          "check": "SEAL_ENROLLMENT",
+          "passed": false,
+          "reasons": [
+            "INVALID_IMAGE"
+          ],
+          "error": {
+            "code": "INVALID_IMAGE",
+            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
+            "status": 422,
+            "details": {
+              "component": "seal_vision",
+              "image": "reference",
+              "remediation": "Capture a new JPEG or PNG seal image."
+            }
+          }
+        },
+        "totals": {
+          "n": 4,
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 0,
+          "not_evaluated": 4,
+          "false_accepts": 0,
+          "false_rejects": 0
+        },
+        "reference_sha256": "52934438b2772d382cd2d099d2533cc8cd0aae6497a6d06ff8a73bd1273bebc7"
+      }
+    }
+  },
+  "alternative_profiles": {
+    "inspection": {
+      "retrospective_glare_gate": {
+        "compare_to": "primary",
+        "overrides": {
+          "glare_max": 0.01
+        },
+        "basis": "The measured glare ranges of the flash-labelled and other probes motivated an intermediate 1% glare limit.",
+        "validation_scope": "Retrospective comparison on one device and one recapture session. This profile is for offline evaluation. A live threshold change requires independent validation and an active inspection policy update."
+      },
+      "retrospective_lower_overlap_floor": {
+        "compare_to": "retrospective_glare_gate",
+        "overrides": {
+          "min_overlap": 0.7
+        },
+        "basis": "The 70% minimum tests the tradeoff between moderate handheld framing changes and missing edge regions.",
+        "disposition": "REJECTED",
+        "validation_scope": "Retrospective sensitivity trial on the same physical captures. See the observed score ordering and false-reject count."
+      }
+    },
+    "seal": {
+      "enrollment_seam_roi": {
+        "compare_to": "primary",
+        "overrides": {
+          "roi": [
+            1536,
+            1950,
+            5800,
+            1350
+          ]
+        },
+        "basis": "The patterned tape on the enrollment image defines the seam ROI.",
+        "selection": "Measured on the enrollment image before comparing recapture scores.",
+        "coordinates": "Orientation-corrected reference pixels [x, y, width, height]."
+      },
+      "retrospective_lower_inlier_floor": {
+        "compare_to": "enrollment_seam_roi",
+        "overrides": {
+          "min_inliers": 24
+        },
+        "basis": "Sensitivity trial with the same measured seam geometry and a lower minimum inlier count.",
+        "validation_scope": "Retrospective comparison on the recorded seal captures. This profile is for offline evaluation.",
+        "disposition": "REJECTED"
+      }
+    }
+  }
+}
