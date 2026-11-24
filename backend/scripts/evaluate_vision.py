@@ -23,6 +23,9 @@ measurements. It grants no production calibration or release decisions.
 When reference admission fails, the report preserves the failure and counts
 the probes as not evaluated. A standalone check can still assess each input.
 Photo hashes use original bytes. Manifest hashes normalize line endings to LF.
+For the original physical captures, datasets/vision_eval_protocol.json records
+the v2 input-admission baseline and additional offline profiles to evaluate
+alongside the default profiles.
 """
 
 from __future__ import annotations
@@ -77,10 +80,15 @@ class Measurement:
     reasons: list[str]
     explanation: str | None = None
     metrics: dict | None = None
+    quality_gate: dict | None = None
+    classification: str | None = None
+    comparison_state: str = "FAILED"
+    artifacts: dict[str, bool] | None = None
 
 
 SOURCE = "PRERECORDED_EVAL"
-REPORT_VERSION = 2
+REPORT_VERSION = 3
+PROTOCOL = ROOT / "datasets" / "vision_eval_protocol.json"
 LABELS = {
     "inspection": ("golden", "good", "defect", "blurry", "glare", "misaligned"),
     "seal": ("enroll", "intact_recapture", "torn", "repositioned", "bad_light"),
@@ -100,8 +108,20 @@ DEFINITIONS = {
     "false_rejects": "Flagged probes labelled good or intact_recapture. Unverifiable probes are counted separately.",
 }
 INPUT_METADATA_DEFINITION = (
-    "Byte lengths and JPEG marker sequences are read directly from the original files. "
+    "Byte lengths and JPEG frame boundaries are read directly from the original files. "
+    "JPEG trailing bytes are counted after the primary image's structural end-of-image marker. "
     "Declared width and height are read from the image header without decoding pixels or applying orientation."
+)
+COMPARISON_STATES = {
+    "SCORED": "A comparison produced a numeric score and an accepted or flagged outcome.",
+    "AMBIGUOUS": "The seal API returned UNVERIFIABLE with a measured similarity.",
+    "FAILED": "An input, quality, or registration failure left the score unavailable.",
+    "SKIPPED": "The reference was unusable and the probe comparison did not run.",
+}
+PERFORMANCE_DEFINITION = (
+    "Coverage uses all probe captures as the denominator. Error rates use attempted probes "
+    "from the corresponding negative or positive labels. UNVERIFIABLE is counted separately "
+    "from false rejects. Score ranges include only comparisons with numeric scores."
 )
 
 
@@ -112,6 +132,7 @@ class Method:
     thresholds: dict
     input_limits: dict
     reference_assessment: dict
+    self_check: dict
     check_probe: Callable[[bytes], dict]
     measure: Callable[[bytes], Measurement]
 
@@ -124,13 +145,25 @@ def input_metadata(data: bytes) -> dict:
     from PIL import Image
 
     metadata = {"size_bytes": len(data)}
+    if data.startswith(b"\xff\xd8"):
+        from app.features.component_vision._jpeg import InvalidJpeg, jpeg_frame
+
+        try:
+            frame = jpeg_frame(data)
+        except InvalidJpeg:
+            metadata["jpeg_trailing_bytes"] = None
+        else:
+            return {
+                **metadata, "format": "JPEG",
+                "declared_width": frame.width, "declared_height": frame.height,
+                "declared_pixels": frame.width * frame.height,
+                "jpeg_trailing_bytes": len(data) - frame.end,
+            }
     try:
         with Image.open(BytesIO(data), formats=("JPEG", "PNG")) as header:
             width, height = header.size
-            metadata.update(declared_width=width, declared_height=height, declared_pixels=width * height)
-            if header.format == "JPEG":
-                marker = data.rfind(b"\xff\xd9")
-                metadata["jpeg_bytes_after_last_eoi_sequence"] = len(data) - marker - 2 if marker != -1 else None
+            metadata.update(format=header.format, declared_width=width, declared_height=height,
+                            declared_pixels=width * height)
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
         # A readable header is optional diagnostic data; image admission remains with the service.
         pass
@@ -139,6 +172,24 @@ def input_metadata(data: bytes) -> dict:
 
 def input_error(exc: ApiError) -> dict:
     return {"code": exc.code, "message": exc.message, "status": exc.status, "details": exc.details}
+
+
+def artifacts(aligned: bytes | None, diff: bytes | None) -> dict[str, bool]:
+    return {"aligned_png": aligned is not None, "diff_png": diff is not None}
+
+
+def record_comparison(data: bytes, measure: Callable[[bytes], Measurement]) -> dict:
+    from app.core.errors import ApiError
+
+    try:
+        measurement = measure(data)
+    except ApiError as exc:
+        if exc.code != "INVALID_IMAGE":
+            raise
+        reasons = [exc.code, *exc.details.get("reason_codes", [])]
+        failure = Measurement("UNVERIFIABLE", None, reasons, exc.message)
+        return {**asdict(failure), "error": input_error(exc)}
+    return asdict(measurement)
 
 
 def assess_input(operation: str, check: Callable[[], dict]) -> dict:
@@ -225,12 +276,7 @@ def inspection_method(reference: bytes, overrides: dict) -> Method:
 
     def check_reference() -> dict:
         service.validate_reference(reference, thresholds)
-        evidence = service.evaluate(reference, reference, profile, evidence_source=SOURCE)
-        return {
-            "passed": evidence.raw_score is not None,
-            "quality_gate": evidence.quality_gate,
-            "reasons": evidence.reason_codes,
-        }
+        return {"passed": True, "reasons": []}
 
     def probe_quality(probe: bytes) -> dict:
         gate = service.quality_gate(probe, thresholds)
@@ -245,12 +291,30 @@ def inspection_method(reference: bytes, overrides: dict) -> Method:
             outcome = "FLAGGED"
         else:
             outcome = "ACCEPTED"
-        return Measurement(outcome, score, evidence.reason_codes)
+        return Measurement(
+            outcome, score, evidence.reason_codes,
+            metrics=evidence.analysis, quality_gate=evidence.quality_gate,
+            comparison_state="FAILED" if score is None else "SCORED",
+            artifacts=artifacts(evidence.aligned_png, evidence.diff_png),
+        )
 
-    limits = {"max_bytes": service.MAX_IMAGE_BYTES, "max_pixels": service._MAX_PIXELS, "max_side": service._MAX_EDGE}
+    limits = {
+        "max_bytes": service.MAX_IMAGE_BYTES,
+        "max_jpeg_pixels": service.MAX_IMAGE_PIXELS,
+        "max_png_pixels": service.MAX_PNG_PIXELS,
+        "max_side": service.MAX_IMAGE_SIDE,
+        "max_full_decode_pixels": service._MAX_FULL_DECODE_PIXELS,
+        "max_reduced_jpeg_side": service.MAX_DECODED_SIDE,
+        "max_working_side": service._WORK_EDGE,
+    }
+    admission = assess_input("GOLDEN_ADMISSION", check_reference)
+    self_check = {"check": "GOLDEN_SELF_COMPARISON", **record_comparison(reference, measure)}
+    if self_check["quality_gate"] is not None:
+        admission["quality_gate"] = self_check["quality_gate"]
+    if admission["passed"]:
+        admission.update(passed=self_check["score"] is not None, reasons=self_check["reasons"])
     return Method(
-        service.METHOD_VERSION, "raw_score", thresholds, limits,
-        assess_input("GOLDEN_ADMISSION", check_reference),
+        service.METHOD_VERSION, "raw_score", thresholds, limits, admission, self_check,
         lambda probe: assess_input("INSPECTION_QUALITY_GATE", lambda: probe_quality(probe)), measure,
     )
 
@@ -290,38 +354,188 @@ def seal_method(reference: bytes, overrides: dict) -> Method:
 
     def measure(probe: bytes) -> Measurement:
         evidence = service.compare(reference, probe, profile, evidence_source=SOURCE)
+        score = evidence.metrics["ssim"]
+        state = "SCORED"
+        if evidence.result == "UNVERIFIABLE":
+            state = "FAILED" if score is None else "AMBIGUOUS"
         return Measurement(
             outcome=outcomes[evidence.result],
-            score=evidence.metrics["ssim"],
+            score=score,
             reasons=evidence.quality_gate["failures"],
             explanation=evidence.explanation,
             metrics=evidence.metrics,
+            quality_gate=evidence.quality_gate,
+            classification=evidence.result,
+            comparison_state=state,
+            artifacts=artifacts(evidence.aligned_png, evidence.diff_png),
         )
 
-    limits = {"max_bytes": service.MAX_IMAGE_BYTES, "max_pixels": service.MAX_IMAGE_PIXELS, "max_side": service.MAX_IMAGE_SIDE}
+    limits = {
+        "max_bytes": service.MAX_IMAGE_BYTES,
+        "max_jpeg_pixels": service.MAX_IMAGE_PIXELS,
+        "max_png_pixels": service.MAX_PNG_PIXELS,
+        "max_side": service.MAX_IMAGE_SIDE,
+        "max_full_decode_pixels": service.MAX_FULL_DECODE_PIXELS,
+        "max_reduced_jpeg_side": service.MAX_DECODED_SIDE,
+        "max_working_side": service.WORKING_SIDE,
+    }
+    admission = assess_input("SEAL_ENROLLMENT", lambda: enrollment(reference, profile))
+    admission["usable"] = admission["passed"]
+    self_check = {"check": "SEAL_SELF_COMPARISON", **record_comparison(reference, measure)}
     return Method(
-        service.METHOD_VERSION, "ssim", thresholds, limits,
-        assess_input("SEAL_ENROLLMENT", lambda: enrollment(reference, profile)),
+        service.METHOD_VERSION, "ssim", thresholds, limits, admission, self_check,
         lambda probe: assess_input("SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT", lambda: enrollment(probe, probe_profile)),
         measure,
     )
 
 
-def evaluate_set(kind: str, path: Path, output: Path) -> dict:
-    from app.core.errors import ApiError
+def evaluate_probe(method: Method, data: bytes) -> dict:
+    if method.reference_assessment["passed"]:
+        return record_comparison(data, method.measure)
+    skipped = Measurement("NOT_EVALUATED", None, ["REFERENCE_UNUSABLE"], comparison_state="SKIPPED")
+    return {**asdict(skipped), "standalone_assessment": method.check_probe(data)}
 
+
+def fraction(count: int, denominator: int) -> dict:
+    return {
+        "count": count,
+        "denominator": denominator,
+        "ratio": count / denominator if denominator else None,
+    }
+
+
+def inspection_score_ordering(scores: dict[str, list[float]]) -> dict:
+    good, defect = scores.get("good", []), scores.get("defect", [])
+    highest_good = max(good, default=None)
+    lowest_defect = min(defect, default=None)
+    margin = lowest_defect - highest_good if highest_good is not None and lowest_defect is not None else None
+    return {
+        "good_scored": len(good),
+        "defect_scored": len(defect),
+        "max_good": highest_good,
+        "min_defect": lowest_defect,
+        "min_defect_minus_max_good": margin,
+        "single_threshold_separates_scored_probes": margin > 0 if margin is not None else None,
+    }
+
+
+def summarize(kind: str, method: Method, results: list[dict], threshold_choice: dict) -> dict:
+    conditions: dict[str, dict] = {}
+    scores: dict[str, list[float]] = {}
+    expected_accept = LABELS[kind][1]
+    for result in results:
+        label, outcome = result["label"], result["outcome"]
+        good = label == expected_accept
+        counts = conditions.setdefault(label, dict.fromkeys(DEFINITIONS, 0))
+        counts["n"] += 1
+        counts[outcome.lower()] += 1
+        counts["false_accepts"] += int(not good and outcome == "ACCEPTED")
+        counts["false_rejects"] += int(good and outcome == "FLAGGED")
+        label_scores = scores.setdefault(label, [])
+        if result["score"] is not None:
+            label_scores.append(result["score"])
+    totals = {field: sum(group[field] for group in conditions.values()) for field in DEFINITIONS}
+    attempted = [result for result in results if result["outcome"] != "NOT_EVALUATED"]
+    attempted_good = sum(result["label"] == expected_accept for result in attempted)
+    n = totals["n"]
+    report = {
+        "method_version": method.version,
+        "score_name": method.score_name,
+        "thresholds": method.thresholds,
+        "threshold_status": "PROVISIONAL",
+        "threshold_choice": threshold_choice,
+        "comparison_status": "COMPLETED" if method.reference_assessment["passed"] else "BLOCKED_REFERENCE",
+        "input_limits": method.input_limits,
+        "reference": {"admission": method.reference_assessment, "self_check": method.self_check},
+        "conditions": conditions,
+        "totals": totals,
+        "performance": {
+            "comparison_coverage": fraction(len(attempted), n),
+            "numeric_score_coverage": fraction(sum(map(len, scores.values())), n),
+            "decision_coverage": fraction(totals["accepted"] + totals["flagged"], n),
+            "false_accept_rate": fraction(totals["false_accepts"], len(attempted) - attempted_good),
+            "false_reject_rate": fraction(totals["false_rejects"], attempted_good),
+            "comparison_states": dict(Counter(result["comparison_state"] for result in results)),
+            "failure_reasons": dict(Counter(
+                reason for result in attempted if result["comparison_state"] == "FAILED"
+                for reason in result["reasons"]
+            )),
+            "score_ranges_by_condition": {
+                label: {"n": len(values), "min": min(values, default=None), "max": max(values, default=None)}
+                for label, values in scores.items()
+            },
+        },
+        "results": results,
+    }
+    if kind == "inspection":
+        report["performance"]["good_defect_score_ordering"] = inspection_score_ordering(scores)
+    return report
+
+
+def alternative_result(kind: str, before: dict, after: dict) -> dict:
+    decision = ("outcome", "classification", "score", "reasons", "comparison_state")
+    result = {
+        "file": after["file"],
+        "label": after["label"],
+        "before": {field: before[field] for field in decision},
+        **{field: after[field] for field in decision},
+    }
+    gate = after["quality_gate"] or {}
+    compared_gate = before["quality_gate"] or {}
+    gate_changes = {
+        field: value for field, value in gate.items()
+        if field not in {"thresholds", "reference"} and value != compared_gate.get(field)
+    }
+    if gate_changes:
+        result["quality_gate_changes"] = gate_changes
+    if kind == "seal" and after["metrics"] is not None:
+        result["metrics"] = {field: value for field, value in after["metrics"].items() if field != "thresholds"}
+    for field in ("explanation", "artifacts", "error", "standalone_assessment"):
+        if after.get(field) is not None:
+            result[field] = after[field]
+    return result
+
+
+def glare_measurements(results: list[dict]) -> dict:
+    groups: dict[str, list[float]] = {"glare_label": [], "other_labels": []}
+    for result in results:
+        gate = result["quality_gate"]
+        if gate is not None:
+            group = "glare_label" if result["label"] == "glare" else "other_labels"
+            groups[group].append(gate["glare_ratio"])
+    return {
+        group: {"n": len(values), "min": min(values, default=None), "max": max(values, default=None)}
+        for group, values in groups.items()
+    }
+
+
+def evaluate_set(kind: str, path: Path, output: Path) -> dict:
     path = path.resolve()
     reference, probes, overrides, manifest_digest = read_manifest(path, kind)
-    if output in {path, reference.path, *(capture.path for capture in probes)}:
+    if output in {PROTOCOL, path, reference.path, *(capture.path for capture in probes)}:
         raise ValueError(f"Output would replace an input file: {output}")
     reference_bytes = reference.path.read_bytes()
     make_method = inspection_method if kind == "inspection" else seal_method
-    method = make_method(reference_bytes, overrides)
-    admitted = method.reference_assessment["passed"]
+    configs = {"primary": overrides}
+    profile_basis = "inspection evaluator defaults" if kind == "inspection" else "platform SealProfile defaults"
+    choices = {"primary": {
+        "basis": profile_basis,
+        "manifest_overrides": overrides,
+        "selection": "The evaluator applies the default thresholds and supplied overrides before comparing probes.",
+    }}
+
     reference_digest = digest(reference_bytes)
+    protocol = json.loads(PROTOCOL.read_text(encoding="utf-8"))
+    baseline = protocol["baseline"]
+    before = baseline["sets"][kind]
+    if not overrides and manifest_digest == before["manifest_sha256"] and reference_digest == before["reference_sha256"]:
+        for name, profile in protocol["alternative_profiles"][kind].items():
+            configs[name] = configs[profile["compare_to"]] | profile["overrides"]
+            choices[name] = profile
+
+    methods = {name: make_method(reference_bytes, config) for name, config in configs.items()}
     seen = {reference_digest}
-    conditions = {}
-    results = []
+    results: dict[str, list[dict]] = {name: [] for name in methods}
     for capture in probes:
         data = capture.path.read_bytes()
         sha = digest(data)
@@ -330,42 +544,55 @@ def evaluate_set(kind: str, path: Path, output: Path) -> dict:
         seen.add(sha)
         result = capture.provenance(path.parent, sha)
         result["input_metadata"] = input_metadata(data)
-        if admitted:
-            try:
-                measurement = method.measure(data)
-            except ApiError as exc:
-                if exc.code != "INVALID_IMAGE":
-                    raise
-                measurement = Measurement("UNVERIFIABLE", None, [exc.code], exc.message)
-                result["error"] = input_error(exc)
-        else:
-            measurement = Measurement("NOT_EVALUATED", None, ["REFERENCE_UNUSABLE"])
-            result["standalone_assessment"] = method.check_probe(data)
-        outcome = measurement.outcome
-        good = capture.label == LABELS[kind][1]
-        counts = conditions.setdefault(capture.label, dict.fromkeys(DEFINITIONS, 0))
-        counts["n"] += 1
-        counts[outcome.lower()] += 1
-        counts["false_accepts"] += int(not good and outcome == "ACCEPTED")
-        counts["false_rejects"] += int(good and outcome == "FLAGGED")
-        results.append({**result, **asdict(measurement)})
-    return {
-        "method_version": method.version,
-        "score_name": method.score_name,
-        "thresholds": method.thresholds,
-        "threshold_status": "PROVISIONAL",
-        "comparison_status": "COMPLETED" if admitted else "BLOCKED_REFERENCE",
-        "input_limits": method.input_limits,
-        "reference": {
-            **reference.provenance(path.parent, reference_digest),
-            "input_metadata": input_metadata(reference_bytes),
-            "admission": method.reference_assessment,
-        },
-        "manifest_sha256": manifest_digest,
-        "conditions": conditions,
-        "totals": {field: sum(group[field] for group in conditions.values()) for field in DEFINITIONS},
-        "results": results,
-    }
+        for name, method in methods.items():
+            results[name].append({**result, **evaluate_probe(method, data)})
+
+    provenance = {**reference.provenance(path.parent, reference_digest), "input_metadata": input_metadata(reference_bytes)}
+    reports = {name: summarize(kind, method, results[name], choices[name]) for name, method in methods.items()}
+    for name, summary in reports.items():
+        if name != "primary":
+            comparator = choices[name]["compare_to"]
+            summary["reference"]["file"] = provenance["file"]
+            del summary["input_limits"]  # Every profile uses the primary method's input admission limits.
+            counts = summary["totals"]
+            previous = reports[comparator]["totals"]
+            summary["changes_from_comparator"] = {
+                field: counts[field] - previous[field]
+                for field in ("accepted", "flagged", "unverifiable", "false_accepts", "false_rejects")
+            }
+            summary["results"] = [
+                alternative_result(kind, before_result, after)
+                for before_result, after in zip(results[comparator], results[name], strict=True)
+            ]
+
+    report = reports.pop("primary")
+    report["reference"] = {**provenance, **report["reference"]}
+    report["manifest_sha256"] = manifest_digest
+    capture_index = sorted((row["file"], row["sha256"]) for row in [provenance, *report["results"]])
+    report["capture_set_sha256"] = digest(json.dumps(capture_index, separators=(",", ":")).encode("ascii"))
+
+    if all(report[key] == before[key] for key in ("manifest_sha256", "capture_set_sha256")):
+        metadata = [provenance["input_metadata"], *(result["input_metadata"] for result in report["results"])]
+        report["admission_comparison"] = {
+            "source": baseline["source"],
+            "before": before,
+            "after": {
+                "reference_admitted": methods["primary"].reference_assessment["passed"],
+                "comparison_status": report["comparison_status"],
+                "totals": report["totals"],
+            },
+            "capture_diagnostics": {
+                "jpeg_with_trailing_bytes": sum((entry.get("jpeg_trailing_bytes") or 0) > 0 for entry in metadata),
+                "above_previous_pixel_limit": sum(
+                    entry.get("declared_pixels", 0) > before["input_limits"]["max_pixels"] for entry in metadata
+                ),
+            },
+        }
+        if kind == "inspection":
+            report["glare_ratio_by_condition_group"] = glare_measurements(report["results"])
+        if reports:
+            report["alternative_evaluations"] = reports
+    return report
 
 
 def write_report(path: Path, metrics: dict[str, dict]) -> str:
@@ -382,6 +609,8 @@ def write_report(path: Path, metrics: dict[str, dict]) -> str:
             "evidence_source": SOURCE,
             "definitions": DEFINITIONS,
             "input_metadata_definition": INPUT_METADATA_DEFINITION,
+            "comparison_states": COMPARISON_STATES,
+            "performance_definition": PERFORMANCE_DEFINITION,
         }
         if len(metrics) == 1 and path.exists():
             try:

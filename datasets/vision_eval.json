@@ -1,5 +1,5 @@
 {
-  "report_version": 2,
+  "report_version": 3,
   "evidence_source": "PRERECORDED_EVAL",
   "definitions": {
     "n": "Number of probe captures. The reference is excluded.",
@@ -10,7 +10,14 @@
     "false_accepts": "Accepted probes labelled defect, blurry, glare, misaligned, torn, repositioned, or bad_light.",
     "false_rejects": "Flagged probes labelled good or intact_recapture. Unverifiable probes are counted separately."
   },
-  "input_metadata_definition": "Byte lengths and JPEG marker sequences are read directly from the original files. Declared width and height are read from the image header without decoding pixels or applying orientation.",
+  "input_metadata_definition": "Byte lengths and JPEG frame boundaries are read directly from the original files. JPEG trailing bytes are counted after the primary image's structural end-of-image marker. Declared width and height are read from the image header without decoding pixels or applying orientation.",
+  "comparison_states": {
+    "SCORED": "A comparison produced a numeric score and an accepted or flagged outcome.",
+    "AMBIGUOUS": "The seal API returned UNVERIFIABLE with a measured similarity.",
+    "FAILED": "An input, quality, or registration failure left the score unavailable.",
+    "SKIPPED": "The reference was unusable and the probe comparison did not run."
+  },
+  "performance_definition": "Coverage uses all probe captures as the denominator. Error rates use attempted probes from the corresponding negative or positive labels. UNVERIFIABLE is counted separately from false rejects. Score ranges include only comparisons with numeric scores.",
   "inspection": {
     "method_version": "gd-0.3",
     "score_name": "raw_score",
@@ -33,11 +40,20 @@
       ]
     },
     "threshold_status": "PROVISIONAL",
-    "comparison_status": "BLOCKED_REFERENCE",
+    "threshold_choice": {
+      "basis": "inspection evaluator defaults",
+      "manifest_overrides": {},
+      "selection": "The evaluator applies the default thresholds and supplied overrides before comparing probes."
+    },
+    "comparison_status": "COMPLETED",
     "input_limits": {
       "max_bytes": 10485760,
-      "max_pixels": 24000000,
-      "max_side": 8192
+      "max_jpeg_pixels": 64000000,
+      "max_png_pixels": 24000000,
+      "max_side": 8192,
+      "max_full_decode_pixels": 24000000,
+      "max_reduced_jpeg_side": 2048,
+      "max_working_side": 1280
     },
     "reference": {
       "file": "golden_01.jpg",
@@ -50,45 +66,85 @@
       "evidence_source": "PRERECORDED_EVAL",
       "input_metadata": {
         "size_bytes": 2078392,
+        "format": "JPEG",
         "declared_width": 3840,
         "declared_height": 3280,
         "declared_pixels": 12595200,
-        "jpeg_bytes_after_last_eoi_sequence": 4056
+        "jpeg_trailing_bytes": 4056
       },
       "admission": {
         "check": "GOLDEN_ADMISSION",
-        "passed": false,
-        "reasons": [
-          "INVALID_IMAGE"
-        ],
-        "error": {
-          "code": "INVALID_IMAGE",
-          "message": "JPEG is missing its end-of-image marker",
-          "status": 422,
-          "details": {
-            "component": "component_vision",
-            "remediation": "Capture a new JPEG or PNG within the size limit."
-          }
+        "passed": true,
+        "reasons": [],
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 192.738572640214,
+          "glare_ratio": 8.677909044715448e-05,
+          "width": 3840,
+          "height": 3280,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        }
+      },
+      "self_check": {
+        "check": "GOLDEN_SELF_COMPARISON",
+        "outcome": "ACCEPTED",
+        "score": 0.0,
+        "reasons": [],
+        "explanation": null,
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": 0.0,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 192.738572640214,
+          "glare_ratio": 8.677909044715448e-05,
+          "width": 3840,
+          "height": 3280,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
         }
       }
     },
-    "manifest_sha256": "cbc4c29f702a96572a72dc08ba0c48b20b999a0d3a46454422097fac8c63a4bf",
     "conditions": {
       "good": {
         "n": 3,
-        "accepted": 0,
+        "accepted": 2,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 3,
+        "unverifiable": 1,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
       "defect": {
         "n": 3,
         "accepted": 0,
-        "flagged": 0,
+        "flagged": 3,
         "unverifiable": 0,
-        "not_evaluated": 3,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
@@ -96,8 +152,8 @@
         "n": 1,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 1,
+        "unverifiable": 1,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
@@ -105,8 +161,8 @@
         "n": 2,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 2,
+        "unverifiable": 2,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
@@ -114,20 +170,90 @@
         "n": 2,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 2,
+        "unverifiable": 2,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       }
     },
     "totals": {
       "n": 11,
-      "accepted": 0,
-      "flagged": 0,
-      "unverifiable": 0,
-      "not_evaluated": 11,
+      "accepted": 2,
+      "flagged": 3,
+      "unverifiable": 6,
+      "not_evaluated": 0,
       "false_accepts": 0,
       "false_rejects": 0
+    },
+    "performance": {
+      "comparison_coverage": {
+        "count": 11,
+        "denominator": 11,
+        "ratio": 1.0
+      },
+      "numeric_score_coverage": {
+        "count": 5,
+        "denominator": 11,
+        "ratio": 0.45454545454545453
+      },
+      "decision_coverage": {
+        "count": 5,
+        "denominator": 11,
+        "ratio": 0.45454545454545453
+      },
+      "false_accept_rate": {
+        "count": 0,
+        "denominator": 8,
+        "ratio": 0.0
+      },
+      "false_reject_rate": {
+        "count": 0,
+        "denominator": 3,
+        "ratio": 0.0
+      },
+      "comparison_states": {
+        "FAILED": 6,
+        "SCORED": 5
+      },
+      "failure_reasons": {
+        "ALIGNMENT_FAILED": 5,
+        "IMAGE_QUALITY_BLUR": 1
+      },
+      "score_ranges_by_condition": {
+        "good": {
+          "n": 2,
+          "min": 0.3258156478404999,
+          "max": 0.40521347522735596
+        },
+        "defect": {
+          "n": 3,
+          "min": 0.4640102982521057,
+          "max": 0.9133052229881287
+        },
+        "blurry": {
+          "n": 0,
+          "min": null,
+          "max": null
+        },
+        "glare": {
+          "n": 0,
+          "min": null,
+          "max": null
+        },
+        "misaligned": {
+          "n": 0,
+          "min": null,
+          "max": null
+        }
+      },
+      "good_defect_score_ordering": {
+        "good_scored": 2,
+        "defect_scored": 3,
+        "max_good": 0.40521347522735596,
+        "min_defect": 0.4640102982521057,
+        "min_defect_minus_max_good": 0.058796823024749756,
+        "single_threshold_separates_scored_probes": true
+      }
     },
     "results": [
       {
@@ -141,34 +267,48 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 2949609,
+          "format": "JPEG",
           "declared_width": 4400,
           "declared_height": 4556,
           "declared_pixels": 20046400,
-          "jpeg_bytes_after_last_eoi_sequence": 3953
+          "jpeg_trailing_bytes": 3953
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
+        "outcome": "UNVERIFIABLE",
         "score": null,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "ALIGNMENT_FAILED"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": null,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 111.3808732318026,
+          "glare_ratio": 4.155359565807327e-05,
+          "width": 4400,
+          "height": 4556,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "good_02.jpg",
@@ -181,34 +321,187 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 1992650,
+          "format": "JPEG",
           "declared_width": 3460,
           "declared_height": 3452,
           "declared_pixels": 11943920,
-          "jpeg_bytes_after_last_eoi_sequence": 3948
+          "jpeg_trailing_bytes": 3948
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
+        "outcome": "ACCEPTED",
+        "score": 0.40521347522735596,
+        "reasons": [],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": 0.40521347522735596,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": [
+            {
+              "x": 215,
+              "y": 819,
+              "w": 429,
+              "h": 136,
+              "score": 0.40521347522735596
+            },
+            {
+              "x": 312,
+              "y": 873,
+              "w": 375,
+              "h": 78,
+              "score": 0.35862424969673157
+            },
+            {
+              "x": 229,
+              "y": 219,
+              "w": 34,
+              "h": 477,
+              "score": 0.2962785728703586
+            },
+            {
+              "x": 694,
+              "y": 880,
+              "w": 57,
+              "h": 67,
+              "score": 0.1737518179099137
+            },
+            {
+              "x": 512,
+              "y": 255,
+              "w": 31,
+              "h": 83,
+              "score": 0.13469228310853396
+            },
+            {
+              "x": 818,
+              "y": 244,
+              "w": 36,
+              "h": 88,
+              "score": 0.13447415198018603
+            },
+            {
+              "x": 977,
+              "y": 882,
+              "w": 29,
+              "h": 58,
+              "score": 0.120913073737161
+            },
+            {
+              "x": 884,
+              "y": 885,
+              "w": 26,
+              "h": 56,
+              "score": 0.1185297805062248
+            },
+            {
+              "x": 945,
+              "y": 883,
+              "w": 28,
+              "h": 58,
+              "score": 0.11836986304064559
+            },
+            {
+              "x": 758,
+              "y": 887,
+              "w": 24,
+              "h": 58,
+              "score": 0.11577685856463354
+            },
+            {
+              "x": 852,
+              "y": 887,
+              "w": 26,
+              "h": 56,
+              "score": 0.11542363829416738
+            },
+            {
+              "x": 820,
+              "y": 882,
+              "w": 26,
+              "h": 61,
+              "score": 0.11490887865064531
+            },
+            {
+              "x": 914,
+              "y": 885,
+              "w": 27,
+              "h": 57,
+              "score": 0.11465491497750835
+            },
+            {
+              "x": 789,
+              "y": 886,
+              "w": 25,
+              "h": 58,
+              "score": 0.11092006638055535
+            },
+            {
+              "x": 653,
+              "y": 810,
+              "w": 135,
+              "h": 23,
+              "score": 0.10201137274361162
+            },
+            {
+              "x": 1037,
+              "y": 899,
+              "w": 44,
+              "h": 30,
+              "score": 0.10195693198531582
+            },
+            {
+              "x": 142,
+              "y": 780,
+              "w": 16,
+              "h": 128,
+              "score": 0.09587312510237503
+            },
+            {
+              "x": 343,
+              "y": 856,
+              "w": 42,
+              "h": 8,
+              "score": 0.08500975352591515
+            },
+            {
+              "x": 342,
+              "y": 564,
+              "w": 12,
+              "h": 140,
+              "score": 0.08263798646371161
+            },
+            {
+              "x": 429,
+              "y": 240,
+              "w": 48,
+              "h": 64,
+              "score": 0.0813099083268883
+            }
+          ]
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 230.40318063097092,
+          "glare_ratio": 0.0001578208829262085,
+          "width": 3460,
+          "height": 3452,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
+        }
       },
       {
         "file": "good_03.jpg",
@@ -221,34 +514,187 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 2223364,
+          "format": "JPEG",
           "declared_width": 3928,
           "declared_height": 3268,
           "declared_pixels": 12836704,
-          "jpeg_bytes_after_last_eoi_sequence": 3952
+          "jpeg_trailing_bytes": 3952
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
+        "outcome": "ACCEPTED",
+        "score": 0.3258156478404999,
+        "reasons": [],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": 0.3258156478404999,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": [
+            {
+              "x": 406,
+              "y": 809,
+              "w": 681,
+              "h": 51,
+              "score": 0.3258156478404999
+            },
+            {
+              "x": 808,
+              "y": 413,
+              "w": 135,
+              "h": 56,
+              "score": 0.23944551834750125
+            },
+            {
+              "x": 356,
+              "y": 420,
+              "w": 135,
+              "h": 59,
+              "score": 0.22377552475906173
+            },
+            {
+              "x": 968,
+              "y": 694,
+              "w": 11,
+              "h": 57,
+              "score": 0.13683321363133263
+            },
+            {
+              "x": 373,
+              "y": 690,
+              "w": 22,
+              "h": 32,
+              "score": 0.11731121902520056
+            },
+            {
+              "x": 629,
+              "y": 878,
+              "w": 73,
+              "h": 60,
+              "score": 0.1144267474250211
+            },
+            {
+              "x": 428,
+              "y": 233,
+              "w": 102,
+              "h": 66,
+              "score": 0.09564915763509464
+            },
+            {
+              "x": 359,
+              "y": 490,
+              "w": 127,
+              "h": 19,
+              "score": 0.09421571329163456
+            },
+            {
+              "x": 172,
+              "y": 917,
+              "w": 90,
+              "h": 32,
+              "score": 0.09035974924150372
+            },
+            {
+              "x": 1066,
+              "y": 766,
+              "w": 25,
+              "h": 31,
+              "score": 0.08758848270782024
+            },
+            {
+              "x": 1089,
+              "y": 681,
+              "w": 55,
+              "h": 37,
+              "score": 0.08404959316054807
+            },
+            {
+              "x": 902,
+              "y": 243,
+              "w": 22,
+              "h": 30,
+              "score": 0.07994534745028944
+            },
+            {
+              "x": 493,
+              "y": 882,
+              "w": 30,
+              "h": 58,
+              "score": 0.07908357483225706
+            },
+            {
+              "x": 237,
+              "y": 180,
+              "w": 45,
+              "h": 65,
+              "score": 0.07791553867989078
+            },
+            {
+              "x": 797,
+              "y": 875,
+              "w": 31,
+              "h": 57,
+              "score": 0.07711207060218514
+            },
+            {
+              "x": 331,
+              "y": 141,
+              "w": 109,
+              "h": 11,
+              "score": 0.07582277586772347
+            },
+            {
+              "x": 924,
+              "y": 873,
+              "w": 30,
+              "h": 54,
+              "score": 0.07542890056320468
+            },
+            {
+              "x": 383,
+              "y": 735,
+              "w": 27,
+              "h": 32,
+              "score": 0.07536462845907146
+            },
+            {
+              "x": 805,
+              "y": 481,
+              "w": 144,
+              "h": 23,
+              "score": 0.0747739048085658
+            },
+            {
+              "x": 405,
+              "y": 410,
+              "w": 83,
+              "h": 6,
+              "score": 0.07462389898368925
+            }
+          ]
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 348.1892985365296,
+          "glare_ratio": 6.637217778021524e-05,
+          "width": 3928,
+          "height": 3268,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
+        }
       },
       {
         "file": "defect_01.jpg",
@@ -261,34 +707,189 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 3116591,
+          "format": "JPEG",
           "declared_width": 4748,
           "declared_height": 3904,
           "declared_pixels": 18536192,
-          "jpeg_bytes_after_last_eoi_sequence": 3946
+          "jpeg_trailing_bytes": 3946
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
+        "outcome": "FLAGGED",
+        "score": 0.4640102982521057,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "SCORE_ABOVE_HOLD"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": 0.4640102982521057,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": [
+            {
+              "x": 225,
+              "y": 483,
+              "w": 846,
+              "h": 466,
+              "score": 0.4640102982521057
+            },
+            {
+              "x": 951,
+              "y": 131,
+              "w": 124,
+              "h": 534,
+              "score": 0.38691004315008304
+            },
+            {
+              "x": 137,
+              "y": 374,
+              "w": 102,
+              "h": 557,
+              "score": 0.31379836813479556
+            },
+            {
+              "x": 816,
+              "y": 183,
+              "w": 152,
+              "h": 182,
+              "score": 0.2584602630682394
+            },
+            {
+              "x": 741,
+              "y": 226,
+              "w": 82,
+              "h": 93,
+              "score": 0.16521503573442775
+            },
+            {
+              "x": 383,
+              "y": 411,
+              "w": 118,
+              "h": 69,
+              "score": 0.14680523270264947
+            },
+            {
+              "x": 955,
+              "y": 435,
+              "w": 49,
+              "h": 251,
+              "score": 0.13565240038437804
+            },
+            {
+              "x": 357,
+              "y": 415,
+              "w": 16,
+              "h": 62,
+              "score": 0.12843751037962262
+            },
+            {
+              "x": 815,
+              "y": 411,
+              "w": 133,
+              "h": 60,
+              "score": 0.1275844145209933
+            },
+            {
+              "x": 232,
+              "y": 160,
+              "w": 71,
+              "h": 179,
+              "score": 0.12624731617351512
+            },
+            {
+              "x": 427,
+              "y": 232,
+              "w": 89,
+              "h": 66,
+              "score": 0.12484285320065311
+            },
+            {
+              "x": 818,
+              "y": 399,
+              "w": 92,
+              "h": 36,
+              "score": 0.11032337838865552
+            },
+            {
+              "x": 645,
+              "y": 131,
+              "w": 195,
+              "h": 7,
+              "score": 0.11008125863594746
+            },
+            {
+              "x": 632,
+              "y": 336,
+              "w": 21,
+              "h": 36,
+              "score": 0.09866389460704077
+            },
+            {
+              "x": 998,
+              "y": 668,
+              "w": 71,
+              "h": 66,
+              "score": 0.09570193202151811
+            },
+            {
+              "x": 620,
+              "y": 872,
+              "w": 31,
+              "h": 69,
+              "score": 0.09513537603971034
+            },
+            {
+              "x": 402,
+              "y": 416,
+              "w": 66,
+              "h": 46,
+              "score": 0.09326866517016502
+            },
+            {
+              "x": 482,
+              "y": 135,
+              "w": 146,
+              "h": 8,
+              "score": 0.08995842344237608
+            },
+            {
+              "x": 1138,
+              "y": 713,
+              "w": 20,
+              "h": 115,
+              "score": 0.08900738293507425
+            },
+            {
+              "x": 652,
+              "y": 872,
+              "w": 30,
+              "h": 69,
+              "score": 0.08614483164100019
+            }
+          ]
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 399.2237746320146,
+          "glare_ratio": 0.00017403790379383208,
+          "width": 4748,
+          "height": 3904,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
+        }
       },
       {
         "file": "defect_02.jpg",
@@ -301,34 +902,189 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 2120214,
+          "format": "JPEG",
           "declared_width": 3684,
           "declared_height": 3252,
           "declared_pixels": 11980368,
-          "jpeg_bytes_after_last_eoi_sequence": 4103
+          "jpeg_trailing_bytes": 4103
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
+        "outcome": "FLAGGED",
+        "score": 0.8535173535346985,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "SCORE_ABOVE_REJECT"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": 0.8535173535346985,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": [
+            {
+              "x": 571,
+              "y": 508,
+              "w": 268,
+              "h": 260,
+              "score": 0.8535173535346985
+            },
+            {
+              "x": 239,
+              "y": 816,
+              "w": 408,
+              "h": 27,
+              "score": 0.3779129087924957
+            },
+            {
+              "x": 653,
+              "y": 812,
+              "w": 140,
+              "h": 22,
+              "score": 0.11140487090885941
+            },
+            {
+              "x": 142,
+              "y": 794,
+              "w": 17,
+              "h": 139,
+              "score": 0.10581285589131055
+            },
+            {
+              "x": 443,
+              "y": 238,
+              "w": 75,
+              "h": 29,
+              "score": 0.09356357976765857
+            },
+            {
+              "x": 288,
+              "y": 899,
+              "w": 22,
+              "h": 45,
+              "score": 0.07299107658783976
+            },
+            {
+              "x": 347,
+              "y": 898,
+              "w": 26,
+              "h": 43,
+              "score": 0.07016157114368816
+            },
+            {
+              "x": 256,
+              "y": 919,
+              "w": 24,
+              "h": 29,
+              "score": 0.06887457039092999
+            },
+            {
+              "x": 316,
+              "y": 897,
+              "w": 26,
+              "h": 48,
+              "score": 0.06876268215080761
+            },
+            {
+              "x": 414,
+              "y": 899,
+              "w": 21,
+              "h": 38,
+              "score": 0.06641168315508116
+            },
+            {
+              "x": 478,
+              "y": 898,
+              "w": 21,
+              "h": 43,
+              "score": 0.06522707663740004
+            },
+            {
+              "x": 446,
+              "y": 897,
+              "w": 21,
+              "h": 41,
+              "score": 0.06519277731272606
+            },
+            {
+              "x": 572,
+              "y": 897,
+              "w": 20,
+              "h": 37,
+              "score": 0.064718877461605
+            },
+            {
+              "x": 382,
+              "y": 897,
+              "w": 22,
+              "h": 41,
+              "score": 0.06332664198640658
+            },
+            {
+              "x": 509,
+              "y": 897,
+              "w": 21,
+              "h": 41,
+              "score": 0.062090345541068556
+            },
+            {
+              "x": 666,
+              "y": 897,
+              "w": 20,
+              "h": 37,
+              "score": 0.06116961005396702
+            },
+            {
+              "x": 541,
+              "y": 898,
+              "w": 19,
+              "h": 34,
+              "score": 0.060558522472441284
+            },
+            {
+              "x": 809,
+              "y": 424,
+              "w": 13,
+              "h": 45,
+              "score": 0.05964708234889811
+            },
+            {
+              "x": 603,
+              "y": 897,
+              "w": 20,
+              "h": 33,
+              "score": 0.05861028349818669
+            },
+            {
+              "x": 763,
+              "y": 232,
+              "w": 55,
+              "h": 17,
+              "score": 0.05473259194389047
+            }
+          ]
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 245.6840907599012,
+          "glare_ratio": 0.00015867626102971128,
+          "width": 3684,
+          "height": 3252,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
+        }
       },
       {
         "file": "defect_03.jpg",
@@ -341,34 +1097,189 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 2046980,
+          "format": "JPEG",
           "declared_width": 3880,
           "declared_height": 3068,
           "declared_pixels": 11903840,
-          "jpeg_bytes_after_last_eoi_sequence": 3954
+          "jpeg_trailing_bytes": 3954
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
+        "outcome": "FLAGGED",
+        "score": 0.9133052229881287,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "SCORE_ABOVE_REJECT"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": 0.9133052229881287,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": [
+            {
+              "x": 541,
+              "y": 845,
+              "w": 241,
+              "h": 116,
+              "score": 0.9133052229881287
+            },
+            {
+              "x": 489,
+              "y": 815,
+              "w": 298,
+              "h": 23,
+              "score": 0.21315931688820344
+            },
+            {
+              "x": 294,
+              "y": 825,
+              "w": 144,
+              "h": 15,
+              "score": 0.12280663664497615
+            },
+            {
+              "x": 142,
+              "y": 794,
+              "w": 14,
+              "h": 128,
+              "score": 0.10250390953641525
+            },
+            {
+              "x": 478,
+              "y": 893,
+              "w": 22,
+              "h": 46,
+              "score": 0.08266260786755014
+            },
+            {
+              "x": 446,
+              "y": 893,
+              "w": 21,
+              "h": 46,
+              "score": 0.07668986485564086
+            },
+            {
+              "x": 415,
+              "y": 894,
+              "w": 21,
+              "h": 46,
+              "score": 0.07611858520365959
+            },
+            {
+              "x": 790,
+              "y": 888,
+              "w": 21,
+              "h": 41,
+              "score": 0.07446200647346032
+            },
+            {
+              "x": 509,
+              "y": 892,
+              "w": 21,
+              "h": 46,
+              "score": 0.0742934110993285
+            },
+            {
+              "x": 351,
+              "y": 897,
+              "w": 22,
+              "h": 41,
+              "score": 0.07242499217428004
+            },
+            {
+              "x": 320,
+              "y": 897,
+              "w": 21,
+              "h": 44,
+              "score": 0.06849447199128536
+            },
+            {
+              "x": 383,
+              "y": 895,
+              "w": 21,
+              "h": 40,
+              "score": 0.0684262037920304
+            },
+            {
+              "x": 822,
+              "y": 887,
+              "w": 20,
+              "h": 39,
+              "score": 0.06332795390789657
+            },
+            {
+              "x": 384,
+              "y": 736,
+              "w": 16,
+              "h": 31,
+              "score": 0.0581081927924123
+            },
+            {
+              "x": 257,
+              "y": 920,
+              "w": 21,
+              "h": 25,
+              "score": 0.05745284256348847
+            },
+            {
+              "x": 989,
+              "y": 883,
+              "w": 10,
+              "h": 40,
+              "score": 0.05744940306108133
+            },
+            {
+              "x": 301,
+              "y": 915,
+              "w": 9,
+              "h": 26,
+              "score": 0.056197271635754144
+            },
+            {
+              "x": 864,
+              "y": 890,
+              "w": 9,
+              "h": 36,
+              "score": 0.054433826953638964
+            },
+            {
+              "x": 957,
+              "y": 882,
+              "w": 10,
+              "h": 40,
+              "score": 0.05431276743828928
+            },
+            {
+              "x": 896,
+              "y": 890,
+              "w": 11,
+              "h": 39,
+              "score": 0.051108196354650845
+            }
+          ]
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 302.11959683865354,
+          "glare_ratio": 0.00013835871449885078,
+          "width": 3880,
+          "height": 3068,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
+        }
       },
       {
         "file": "blurry_01.jpg",
@@ -381,34 +1292,50 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 326763,
+          "format": "JPEG",
           "declared_width": 1048,
           "declared_height": 944,
           "declared_pixels": 989312,
-          "jpeg_bytes_after_last_eoi_sequence": 4101
+          "jpeg_trailing_bytes": 4101
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
+        "outcome": "UNVERIFIABLE",
         "score": null,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "IMAGE_QUALITY_BLUR"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": false,
+          "score": null,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": false,
+          "blur_laplacian_var": 12.980915019607256,
+          "glare_ratio": 0.0,
+          "width": 1048,
+          "height": 944,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": [
+            "IMAGE_QUALITY_BLUR"
+          ]
+        },
+        "classification": null,
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "glare_01.jpg",
@@ -421,34 +1348,48 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 4054434,
+          "format": "JPEG",
           "declared_width": 4020,
           "declared_height": 3816,
           "declared_pixels": 15340320,
-          "jpeg_bytes_after_last_eoi_sequence": 3951
+          "jpeg_trailing_bytes": 3951
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
+        "outcome": "UNVERIFIABLE",
         "score": null,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "ALIGNMENT_FAILED"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": null,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 916.780210238332,
+          "glare_ratio": 0.052278635647757025,
+          "width": 4020,
+          "height": 3816,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "glare_02.jpg",
@@ -461,34 +1402,48 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 3762125,
+          "format": "JPEG",
           "declared_width": 3848,
           "declared_height": 3836,
           "declared_pixels": 14760928,
-          "jpeg_bytes_after_last_eoi_sequence": 3951
+          "jpeg_trailing_bytes": 3951
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
+        "outcome": "UNVERIFIABLE",
         "score": null,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "ALIGNMENT_FAILED"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": null,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 902.602767390327,
+          "glare_ratio": 0.03276955215823829,
+          "width": 3848,
+          "height": 3836,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "misaligned_01.jpg",
@@ -501,34 +1456,48 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 1900339,
+          "format": "JPEG",
           "declared_width": 3660,
           "declared_height": 3068,
           "declared_pixels": 11228880,
-          "jpeg_bytes_after_last_eoi_sequence": 3949
+          "jpeg_trailing_bytes": 3949
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
-          "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
-          ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "JPEG is missing its end-of-image marker",
-            "status": 422,
-            "details": {
-              "component": "component_vision",
-              "remediation": "Capture a new JPEG or PNG within the size limit."
-            }
-          }
-        },
-        "outcome": "NOT_EVALUATED",
+        "outcome": "UNVERIFIABLE",
         "score": null,
         "reasons": [
-          "REFERENCE_UNUSABLE"
+          "ALIGNMENT_FAILED"
         ],
         "explanation": null,
-        "metrics": null
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": null,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 278.03110509924363,
+          "glare_ratio": 0.0006314966408047819,
+          "width": 3660,
+          "height": 3068,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "misaligned_02.jpg",
@@ -541,13 +1510,88 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 2210318,
+          "format": "JPEG",
           "declared_width": 4916,
           "declared_height": 2916,
           "declared_pixels": 14335056,
-          "jpeg_bytes_after_last_eoi_sequence": 3896
+          "jpeg_trailing_bytes": 3896
         },
-        "standalone_assessment": {
-          "check": "INSPECTION_QUALITY_GATE",
+        "outcome": "UNVERIFIABLE",
+        "score": null,
+        "reasons": [
+          "ALIGNMENT_FAILED"
+        ],
+        "explanation": null,
+        "metrics": {
+          "method": "golden_diff",
+          "method_version": "gd-0.3",
+          "calibrated": true,
+          "score": null,
+          "hold_threshold": 0.45,
+          "reject_threshold": 0.7,
+          "threshold_tightened": false,
+          "regions": []
+        },
+        "quality_gate": {
+          "passed": true,
+          "blur_laplacian_var": 205.31473327389324,
+          "glare_ratio": 0.0018254550243821859,
+          "width": 4916,
+          "height": 2916,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "min_w": 320,
+            "min_h": 240
+          },
+          "failures": []
+        },
+        "classification": null,
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
+      }
+    ],
+    "manifest_sha256": "cbc4c29f702a96572a72dc08ba0c48b20b999a0d3a46454422097fac8c63a4bf",
+    "capture_set_sha256": "ddec0f7d16292115ccbac0852ff4d39dd77ce7bd86495e0cc211f1c705af501b",
+    "admission_comparison": {
+      "source": {
+        "commit": "1ea34ab1fc7e0833cadd71e5d831d9c0425a9118",
+        "path": "datasets/vision_eval.json",
+        "report_version": 2
+      },
+      "before": {
+        "method_version": "gd-0.3",
+        "manifest_sha256": "cbc4c29f702a96572a72dc08ba0c48b20b999a0d3a46454422097fac8c63a4bf",
+        "capture_set_sha256": "ddec0f7d16292115ccbac0852ff4d39dd77ce7bd86495e0cc211f1c705af501b",
+        "thresholds": {
+          "min_w": 320,
+          "min_h": 240,
+          "blur_min": 80.0,
+          "glare_max": 0.12,
+          "min_inliers": 24,
+          "min_inlier_ratio": 0.55,
+          "min_overlap": 0.82,
+          "min_coverage": 0.12,
+          "hold": 0.45,
+          "reject": 0.7,
+          "roi": [
+            0,
+            0,
+            1,
+            1
+          ]
+        },
+        "input_limits": {
+          "max_bytes": 10485760,
+          "max_pixels": 24000000,
+          "max_side": 8192
+        },
+        "comparison_status": "BLOCKED_REFERENCE",
+        "reference_admission": {
+          "check": "GOLDEN_ADMISSION",
           "passed": false,
           "reasons": [
             "INVALID_IMAGE"
@@ -562,15 +1606,1028 @@
             }
           }
         },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
-        "explanation": null,
-        "metrics": null
+        "totals": {
+          "n": 11,
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 0,
+          "not_evaluated": 11,
+          "false_accepts": 0,
+          "false_rejects": 0
+        },
+        "reference_sha256": "3cdcd82e8d4eadfcb46c50d0848aab0442cc91c3bf5a08317a5caa852d941706"
+      },
+      "after": {
+        "reference_admitted": true,
+        "comparison_status": "COMPLETED",
+        "totals": {
+          "n": 11,
+          "accepted": 2,
+          "flagged": 3,
+          "unverifiable": 6,
+          "not_evaluated": 0,
+          "false_accepts": 0,
+          "false_rejects": 0
+        }
+      },
+      "capture_diagnostics": {
+        "jpeg_with_trailing_bytes": 12,
+        "above_previous_pixel_limit": 0
       }
-    ]
+    },
+    "glare_ratio_by_condition_group": {
+      "glare_label": {
+        "n": 2,
+        "min": 0.03276955215823829,
+        "max": 0.052278635647757025
+      },
+      "other_labels": {
+        "n": 9,
+        "min": 0.0,
+        "max": 0.0018254550243821859
+      }
+    },
+    "alternative_evaluations": {
+      "retrospective_glare_gate": {
+        "method_version": "gd-0.3",
+        "score_name": "raw_score",
+        "thresholds": {
+          "min_w": 320,
+          "min_h": 240,
+          "blur_min": 80.0,
+          "glare_max": 0.01,
+          "min_inliers": 24,
+          "min_inlier_ratio": 0.55,
+          "min_overlap": 0.82,
+          "min_coverage": 0.12,
+          "hold": 0.45,
+          "reject": 0.7,
+          "roi": [
+            0,
+            0,
+            1,
+            1
+          ]
+        },
+        "threshold_status": "PROVISIONAL",
+        "threshold_choice": {
+          "compare_to": "primary",
+          "overrides": {
+            "glare_max": 0.01
+          },
+          "basis": "The measured glare ranges of the flash-labelled and other probes motivated an intermediate 1% glare limit.",
+          "validation_scope": "Retrospective comparison on one device and one recapture session. This profile is for offline evaluation. A live threshold change requires independent validation and an active inspection policy update."
+        },
+        "comparison_status": "COMPLETED",
+        "reference": {
+          "admission": {
+            "check": "GOLDEN_ADMISSION",
+            "passed": true,
+            "reasons": [],
+            "quality_gate": {
+              "passed": true,
+              "blur_laplacian_var": 192.738572640214,
+              "glare_ratio": 8.677909044715448e-05,
+              "width": 3840,
+              "height": 3280,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.01,
+                "min_w": 320,
+                "min_h": 240
+              },
+              "failures": []
+            }
+          },
+          "self_check": {
+            "check": "GOLDEN_SELF_COMPARISON",
+            "outcome": "ACCEPTED",
+            "score": 0.0,
+            "reasons": [],
+            "explanation": null,
+            "metrics": {
+              "method": "golden_diff",
+              "method_version": "gd-0.3",
+              "calibrated": true,
+              "score": 0.0,
+              "hold_threshold": 0.45,
+              "reject_threshold": 0.7,
+              "threshold_tightened": false,
+              "regions": []
+            },
+            "quality_gate": {
+              "passed": true,
+              "blur_laplacian_var": 192.738572640214,
+              "glare_ratio": 8.677909044715448e-05,
+              "width": 3840,
+              "height": 3280,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.01,
+                "min_w": 320,
+                "min_h": 240
+              },
+              "failures": []
+            },
+            "classification": null,
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          "file": "golden_01.jpg"
+        },
+        "conditions": {
+          "good": {
+            "n": 3,
+            "accepted": 2,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "defect": {
+            "n": 3,
+            "accepted": 0,
+            "flagged": 3,
+            "unverifiable": 0,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "blurry": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "glare": {
+            "n": 2,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 2,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "misaligned": {
+            "n": 2,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 2,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          }
+        },
+        "totals": {
+          "n": 11,
+          "accepted": 2,
+          "flagged": 3,
+          "unverifiable": 6,
+          "not_evaluated": 0,
+          "false_accepts": 0,
+          "false_rejects": 0
+        },
+        "performance": {
+          "comparison_coverage": {
+            "count": 11,
+            "denominator": 11,
+            "ratio": 1.0
+          },
+          "numeric_score_coverage": {
+            "count": 5,
+            "denominator": 11,
+            "ratio": 0.45454545454545453
+          },
+          "decision_coverage": {
+            "count": 5,
+            "denominator": 11,
+            "ratio": 0.45454545454545453
+          },
+          "false_accept_rate": {
+            "count": 0,
+            "denominator": 8,
+            "ratio": 0.0
+          },
+          "false_reject_rate": {
+            "count": 0,
+            "denominator": 3,
+            "ratio": 0.0
+          },
+          "comparison_states": {
+            "FAILED": 6,
+            "SCORED": 5
+          },
+          "failure_reasons": {
+            "ALIGNMENT_FAILED": 3,
+            "IMAGE_QUALITY_BLUR": 1,
+            "IMAGE_QUALITY_GLARE": 2
+          },
+          "score_ranges_by_condition": {
+            "good": {
+              "n": 2,
+              "min": 0.3258156478404999,
+              "max": 0.40521347522735596
+            },
+            "defect": {
+              "n": 3,
+              "min": 0.4640102982521057,
+              "max": 0.9133052229881287
+            },
+            "blurry": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "glare": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "misaligned": {
+              "n": 0,
+              "min": null,
+              "max": null
+            }
+          },
+          "good_defect_score_ordering": {
+            "good_scored": 2,
+            "defect_scored": 3,
+            "max_good": 0.40521347522735596,
+            "min_defect": 0.4640102982521057,
+            "min_defect_minus_max_good": 0.058796823024749756,
+            "single_threshold_separates_scored_probes": true
+          }
+        },
+        "results": [
+          {
+            "file": "good_01.jpg",
+            "label": "good",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "ALIGNMENT_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "good_02.jpg",
+            "label": "good",
+            "before": {
+              "outcome": "ACCEPTED",
+              "classification": null,
+              "score": 0.40521347522735596,
+              "reasons": [],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "ACCEPTED",
+            "classification": null,
+            "score": 0.40521347522735596,
+            "reasons": [],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "good_03.jpg",
+            "label": "good",
+            "before": {
+              "outcome": "ACCEPTED",
+              "classification": null,
+              "score": 0.3258156478404999,
+              "reasons": [],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "ACCEPTED",
+            "classification": null,
+            "score": 0.3258156478404999,
+            "reasons": [],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "defect_01.jpg",
+            "label": "defect",
+            "before": {
+              "outcome": "FLAGGED",
+              "classification": null,
+              "score": 0.4640102982521057,
+              "reasons": [
+                "SCORE_ABOVE_HOLD"
+              ],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.4640102982521057,
+            "reasons": [
+              "SCORE_ABOVE_HOLD"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "defect_02.jpg",
+            "label": "defect",
+            "before": {
+              "outcome": "FLAGGED",
+              "classification": null,
+              "score": 0.8535173535346985,
+              "reasons": [
+                "SCORE_ABOVE_REJECT"
+              ],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.8535173535346985,
+            "reasons": [
+              "SCORE_ABOVE_REJECT"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "defect_03.jpg",
+            "label": "defect",
+            "before": {
+              "outcome": "FLAGGED",
+              "classification": null,
+              "score": 0.9133052229881287,
+              "reasons": [
+                "SCORE_ABOVE_REJECT"
+              ],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.9133052229881287,
+            "reasons": [
+              "SCORE_ABOVE_REJECT"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "blurry_01.jpg",
+            "label": "blurry",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "IMAGE_QUALITY_BLUR"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_BLUR"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "glare_01.jpg",
+            "label": "glare",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_GLARE"
+            ],
+            "comparison_state": "FAILED",
+            "quality_gate_changes": {
+              "passed": false,
+              "failures": [
+                "IMAGE_QUALITY_GLARE"
+              ]
+            },
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "glare_02.jpg",
+            "label": "glare",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_GLARE"
+            ],
+            "comparison_state": "FAILED",
+            "quality_gate_changes": {
+              "passed": false,
+              "failures": [
+                "IMAGE_QUALITY_GLARE"
+              ]
+            },
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "misaligned_01.jpg",
+            "label": "misaligned",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "ALIGNMENT_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "misaligned_02.jpg",
+            "label": "misaligned",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "ALIGNMENT_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          }
+        ],
+        "changes_from_comparator": {
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 0,
+          "false_accepts": 0,
+          "false_rejects": 0
+        }
+      },
+      "retrospective_lower_overlap_floor": {
+        "method_version": "gd-0.3",
+        "score_name": "raw_score",
+        "thresholds": {
+          "min_w": 320,
+          "min_h": 240,
+          "blur_min": 80.0,
+          "glare_max": 0.01,
+          "min_inliers": 24,
+          "min_inlier_ratio": 0.55,
+          "min_overlap": 0.7,
+          "min_coverage": 0.12,
+          "hold": 0.45,
+          "reject": 0.7,
+          "roi": [
+            0,
+            0,
+            1,
+            1
+          ]
+        },
+        "threshold_status": "PROVISIONAL",
+        "threshold_choice": {
+          "compare_to": "retrospective_glare_gate",
+          "overrides": {
+            "min_overlap": 0.7
+          },
+          "basis": "The 70% minimum tests the tradeoff between moderate handheld framing changes and missing edge regions.",
+          "disposition": "REJECTED",
+          "validation_scope": "Retrospective sensitivity trial on the same physical captures. See the observed score ordering and false-reject count."
+        },
+        "comparison_status": "COMPLETED",
+        "reference": {
+          "admission": {
+            "check": "GOLDEN_ADMISSION",
+            "passed": true,
+            "reasons": [],
+            "quality_gate": {
+              "passed": true,
+              "blur_laplacian_var": 192.738572640214,
+              "glare_ratio": 8.677909044715448e-05,
+              "width": 3840,
+              "height": 3280,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.01,
+                "min_w": 320,
+                "min_h": 240
+              },
+              "failures": []
+            }
+          },
+          "self_check": {
+            "check": "GOLDEN_SELF_COMPARISON",
+            "outcome": "ACCEPTED",
+            "score": 0.0,
+            "reasons": [],
+            "explanation": null,
+            "metrics": {
+              "method": "golden_diff",
+              "method_version": "gd-0.3",
+              "calibrated": true,
+              "score": 0.0,
+              "hold_threshold": 0.45,
+              "reject_threshold": 0.7,
+              "threshold_tightened": false,
+              "regions": []
+            },
+            "quality_gate": {
+              "passed": true,
+              "blur_laplacian_var": 192.738572640214,
+              "glare_ratio": 8.677909044715448e-05,
+              "width": 3840,
+              "height": 3280,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.01,
+                "min_w": 320,
+                "min_h": 240
+              },
+              "failures": []
+            },
+            "classification": null,
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          "file": "golden_01.jpg"
+        },
+        "conditions": {
+          "good": {
+            "n": 3,
+            "accepted": 2,
+            "flagged": 1,
+            "unverifiable": 0,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 1
+          },
+          "defect": {
+            "n": 3,
+            "accepted": 0,
+            "flagged": 3,
+            "unverifiable": 0,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "blurry": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "glare": {
+            "n": 2,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 2,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "misaligned": {
+            "n": 2,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 2,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          }
+        },
+        "totals": {
+          "n": 11,
+          "accepted": 2,
+          "flagged": 4,
+          "unverifiable": 5,
+          "not_evaluated": 0,
+          "false_accepts": 0,
+          "false_rejects": 1
+        },
+        "performance": {
+          "comparison_coverage": {
+            "count": 11,
+            "denominator": 11,
+            "ratio": 1.0
+          },
+          "numeric_score_coverage": {
+            "count": 6,
+            "denominator": 11,
+            "ratio": 0.5454545454545454
+          },
+          "decision_coverage": {
+            "count": 6,
+            "denominator": 11,
+            "ratio": 0.5454545454545454
+          },
+          "false_accept_rate": {
+            "count": 0,
+            "denominator": 8,
+            "ratio": 0.0
+          },
+          "false_reject_rate": {
+            "count": 1,
+            "denominator": 3,
+            "ratio": 0.3333333333333333
+          },
+          "comparison_states": {
+            "SCORED": 6,
+            "FAILED": 5
+          },
+          "failure_reasons": {
+            "IMAGE_QUALITY_BLUR": 1,
+            "IMAGE_QUALITY_GLARE": 2,
+            "ALIGNMENT_FAILED": 2
+          },
+          "score_ranges_by_condition": {
+            "good": {
+              "n": 3,
+              "min": 0.3258156478404999,
+              "max": 0.600710980432929
+            },
+            "defect": {
+              "n": 3,
+              "min": 0.4640102982521057,
+              "max": 0.9133052229881287
+            },
+            "blurry": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "glare": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "misaligned": {
+              "n": 0,
+              "min": null,
+              "max": null
+            }
+          },
+          "good_defect_score_ordering": {
+            "good_scored": 3,
+            "defect_scored": 3,
+            "max_good": 0.600710980432929,
+            "min_defect": 0.4640102982521057,
+            "min_defect_minus_max_good": -0.13670068218082332,
+            "single_threshold_separates_scored_probes": false
+          }
+        },
+        "results": [
+          {
+            "file": "good_01.jpg",
+            "label": "good",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.600710980432929,
+            "reasons": [
+              "SCORE_ABOVE_HOLD"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "good_02.jpg",
+            "label": "good",
+            "before": {
+              "outcome": "ACCEPTED",
+              "classification": null,
+              "score": 0.40521347522735596,
+              "reasons": [],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "ACCEPTED",
+            "classification": null,
+            "score": 0.40521347522735596,
+            "reasons": [],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "good_03.jpg",
+            "label": "good",
+            "before": {
+              "outcome": "ACCEPTED",
+              "classification": null,
+              "score": 0.3258156478404999,
+              "reasons": [],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "ACCEPTED",
+            "classification": null,
+            "score": 0.3258156478404999,
+            "reasons": [],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "defect_01.jpg",
+            "label": "defect",
+            "before": {
+              "outcome": "FLAGGED",
+              "classification": null,
+              "score": 0.4640102982521057,
+              "reasons": [
+                "SCORE_ABOVE_HOLD"
+              ],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.4640102982521057,
+            "reasons": [
+              "SCORE_ABOVE_HOLD"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "defect_02.jpg",
+            "label": "defect",
+            "before": {
+              "outcome": "FLAGGED",
+              "classification": null,
+              "score": 0.8535173535346985,
+              "reasons": [
+                "SCORE_ABOVE_REJECT"
+              ],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.8535173535346985,
+            "reasons": [
+              "SCORE_ABOVE_REJECT"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "defect_03.jpg",
+            "label": "defect",
+            "before": {
+              "outcome": "FLAGGED",
+              "classification": null,
+              "score": 0.9133052229881287,
+              "reasons": [
+                "SCORE_ABOVE_REJECT"
+              ],
+              "comparison_state": "SCORED"
+            },
+            "outcome": "FLAGGED",
+            "classification": null,
+            "score": 0.9133052229881287,
+            "reasons": [
+              "SCORE_ABOVE_REJECT"
+            ],
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "blurry_01.jpg",
+            "label": "blurry",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "IMAGE_QUALITY_BLUR"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_BLUR"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "glare_01.jpg",
+            "label": "glare",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "IMAGE_QUALITY_GLARE"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_GLARE"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "glare_02.jpg",
+            "label": "glare",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "IMAGE_QUALITY_GLARE"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_GLARE"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "misaligned_01.jpg",
+            "label": "misaligned",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "ALIGNMENT_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "misaligned_02.jpg",
+            "label": "misaligned",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": null,
+              "score": null,
+              "reasons": [
+                "ALIGNMENT_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": null,
+            "score": null,
+            "reasons": [
+              "ALIGNMENT_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          }
+        ],
+        "changes_from_comparator": {
+          "accepted": 0,
+          "flagged": 1,
+          "unverifiable": -1,
+          "false_accepts": 0,
+          "false_rejects": 1
+        }
+      }
+    }
   },
   "seal": {
     "method_version": "seal-orb-ssim-0.2",
@@ -584,11 +2641,20 @@
       "glare_max": 0.12
     },
     "threshold_status": "PROVISIONAL",
-    "comparison_status": "BLOCKED_REFERENCE",
+    "threshold_choice": {
+      "basis": "platform SealProfile defaults",
+      "manifest_overrides": {},
+      "selection": "The evaluator applies the default thresholds and supplied overrides before comparing probes."
+    },
+    "comparison_status": "COMPLETED",
     "input_limits": {
       "max_bytes": 10485760,
-      "max_pixels": 24000000,
-      "max_side": 8192
+      "max_jpeg_pixels": 64000000,
+      "max_png_pixels": 24000000,
+      "max_side": 8192,
+      "max_full_decode_pixels": 24000000,
+      "max_reduced_jpeg_side": 2048,
+      "max_working_side": 960
     },
     "reference": {
       "file": "enroll.jpg",
@@ -601,37 +2667,116 @@
       "evidence_source": "PRERECORDED_EVAL",
       "input_metadata": {
         "size_bytes": 9147246,
+        "format": "JPEG",
         "declared_width": 8192,
         "declared_height": 6144,
         "declared_pixels": 50331648,
-        "jpeg_bytes_after_last_eoi_sequence": 513
+        "jpeg_trailing_bytes": 513
       },
       "admission": {
         "check": "SEAL_ENROLLMENT",
-        "passed": false,
-        "reasons": [
-          "INVALID_IMAGE"
-        ],
-        "error": {
-          "code": "INVALID_IMAGE",
-          "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
-          "status": 422,
-          "details": {
-            "component": "seal_vision",
-            "image": "reference",
-            "remediation": "Capture a new JPEG or PNG seal image."
+        "passed": true,
+        "reasons": [],
+        "quality_gate": {
+          "passed": true,
+          "failures": [],
+          "width": 8192,
+          "height": 6144,
+          "blur_laplacian_var": 662.7,
+          "glare_ratio": 0.0,
+          "dark_ratio": 0.0008,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "dark_max": 0.65,
+            "min_long_side": 320,
+            "min_short_side": 240
           }
+        },
+        "keypoints": 2200,
+        "usable": true
+      },
+      "self_check": {
+        "check": "SEAL_SELF_COMPARISON",
+        "outcome": "ACCEPTED",
+        "score": 1.0,
+        "reasons": [],
+        "explanation": "The registered seam matches the reference with SSIM 1.00.",
+        "metrics": {
+          "keypoints_ref": 2200,
+          "keypoints_probe": 2200,
+          "good_matches": 1026,
+          "inliers": 1026,
+          "inlier_ratio": 1.0,
+          "registration_basis": "OUTER_FRAME",
+          "registration_failure": null,
+          "anchor_good_matches": 1026,
+          "anchor_inliers": 1026,
+          "anchor_registration_failure": null,
+          "surrounding_support": true,
+          "center_shift_ratio": 0.0,
+          "frame_shift_ratio": 0.0,
+          "ssim": 1.0,
+          "min_region_ssim": 1.0,
+          "seam_coverage": 1.0,
+          "thresholds": {
+            "min_inliers": 40,
+            "intact_ssim": 0.72,
+            "suspicious_ssim": 0.6,
+            "min_inlier_ratio": 0.4,
+            "min_seam_coverage": 0.9,
+            "regional_suspicious_ssim": 0.44999999999999996,
+            "max_unanchored_center_shift": 0.02,
+            "max_unanchored_frame_shift": 0.06
+          }
+        },
+        "quality_gate": {
+          "passed": true,
+          "failures": [],
+          "width": 8192,
+          "height": 6144,
+          "blur_laplacian_var": 662.7,
+          "glare_ratio": 0.0,
+          "dark_ratio": 0.0008,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "dark_max": 0.65,
+            "min_long_side": 320,
+            "min_short_side": 240
+          },
+          "reference": {
+            "passed": true,
+            "failures": [],
+            "width": 8192,
+            "height": 6144,
+            "blur_laplacian_var": 662.7,
+            "glare_ratio": 0.0,
+            "dark_ratio": 0.0008,
+            "thresholds": {
+              "blur_min": 80.0,
+              "glare_max": 0.12,
+              "dark_max": 0.65,
+              "min_long_side": 320,
+              "min_short_side": 240
+            }
+          }
+        },
+        "classification": "INTACT",
+        "comparison_state": "SCORED",
+        "artifacts": {
+          "aligned_png": true,
+          "diff_png": true
         }
       }
     },
-    "manifest_sha256": "6c23d15e244673ce41517bb977fbfcae4cebc808a7010a7dae7b2ea0dea7395c",
     "conditions": {
       "intact_recapture": {
         "n": 1,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 1,
+        "unverifiable": 1,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
@@ -639,8 +2784,8 @@
         "n": 1,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 1,
+        "unverifiable": 1,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
@@ -648,8 +2793,8 @@
         "n": 1,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 1,
+        "unverifiable": 1,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       },
@@ -657,8 +2802,8 @@
         "n": 1,
         "accepted": 0,
         "flagged": 0,
-        "unverifiable": 0,
-        "not_evaluated": 1,
+        "unverifiable": 1,
+        "not_evaluated": 0,
         "false_accepts": 0,
         "false_rejects": 0
       }
@@ -667,10 +2812,67 @@
       "n": 4,
       "accepted": 0,
       "flagged": 0,
-      "unverifiable": 0,
-      "not_evaluated": 4,
+      "unverifiable": 4,
+      "not_evaluated": 0,
       "false_accepts": 0,
       "false_rejects": 0
+    },
+    "performance": {
+      "comparison_coverage": {
+        "count": 4,
+        "denominator": 4,
+        "ratio": 1.0
+      },
+      "numeric_score_coverage": {
+        "count": 0,
+        "denominator": 4,
+        "ratio": 0.0
+      },
+      "decision_coverage": {
+        "count": 0,
+        "denominator": 4,
+        "ratio": 0.0
+      },
+      "false_accept_rate": {
+        "count": 0,
+        "denominator": 3,
+        "ratio": 0.0
+      },
+      "false_reject_rate": {
+        "count": 0,
+        "denominator": 1,
+        "ratio": 0.0
+      },
+      "comparison_states": {
+        "FAILED": 4
+      },
+      "failure_reasons": {
+        "REGISTRATION_FAILED": 3,
+        "IMAGE_QUALITY_BLUR": 1,
+        "IMAGE_QUALITY_DARK": 1
+      },
+      "score_ranges_by_condition": {
+        "intact_recapture": {
+          "n": 0,
+          "min": null,
+          "max": null
+        },
+        "torn": {
+          "n": 0,
+          "min": null,
+          "max": null
+        },
+        "repositioned": {
+          "n": 0,
+          "min": null,
+          "max": null
+        },
+        "bad_light": {
+          "n": 0,
+          "min": null,
+          "max": null
+        }
+      }
     },
     "results": [
       {
@@ -684,35 +2886,86 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 8973687,
+          "format": "JPEG",
           "declared_width": 8192,
           "declared_height": 6144,
           "declared_pixels": 50331648,
-          "jpeg_bytes_after_last_eoi_sequence": 513
+          "jpeg_trailing_bytes": 513
         },
-        "standalone_assessment": {
-          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+        "outcome": "UNVERIFIABLE",
+        "score": null,
+        "reasons": [
+          "REGISTRATION_FAILED"
+        ],
+        "explanation": "Recapture with more of the surrounding box visible so the seal alignment can be verified.",
+        "metrics": {
+          "keypoints_ref": 2200,
+          "keypoints_probe": 2200,
+          "good_matches": 307,
+          "inliers": 268,
+          "inlier_ratio": 0.873,
+          "registration_basis": "DISTRIBUTED_FRAME",
+          "registration_failure": "UNANCHORED_FRAME_SHIFT",
+          "anchor_good_matches": 16,
+          "anchor_inliers": null,
+          "anchor_registration_failure": "TOO_FEW_MATCHES",
+          "surrounding_support": false,
+          "center_shift_ratio": 0.0531,
+          "frame_shift_ratio": 0.2324,
+          "ssim": null,
+          "min_region_ssim": null,
+          "seam_coverage": 0.949,
+          "thresholds": {
+            "min_inliers": 40,
+            "intact_ssim": 0.72,
+            "suspicious_ssim": 0.6,
+            "min_inlier_ratio": 0.4,
+            "min_seam_coverage": 0.9,
+            "regional_suspicious_ssim": 0.44999999999999996,
+            "max_unanchored_center_shift": 0.02,
+            "max_unanchored_frame_shift": 0.06
+          }
+        },
+        "quality_gate": {
           "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
+          "failures": [
+            "REGISTRATION_FAILED"
           ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
-            "status": 422,
-            "details": {
-              "component": "seal_vision",
-              "image": "reference",
-              "remediation": "Capture a new JPEG or PNG seal image."
+          "width": 8192,
+          "height": 6144,
+          "blur_laplacian_var": 587.2,
+          "glare_ratio": 0.0,
+          "dark_ratio": 0.0002,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "dark_max": 0.65,
+            "min_long_side": 320,
+            "min_short_side": 240
+          },
+          "reference": {
+            "passed": true,
+            "failures": [],
+            "width": 8192,
+            "height": 6144,
+            "blur_laplacian_var": 662.7,
+            "glare_ratio": 0.0,
+            "dark_ratio": 0.0008,
+            "thresholds": {
+              "blur_min": 80.0,
+              "glare_max": 0.12,
+              "dark_max": 0.65,
+              "min_long_side": 320,
+              "min_short_side": 240
             }
           }
         },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
-        "explanation": null,
-        "metrics": null
+        "classification": "UNVERIFIABLE",
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "torn.jpg",
@@ -725,35 +2978,86 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 7660645,
+          "format": "JPEG",
           "declared_width": 6144,
           "declared_height": 7184,
           "declared_pixels": 44138496,
-          "jpeg_bytes_after_last_eoi_sequence": 3922
+          "jpeg_trailing_bytes": 3922
         },
-        "standalone_assessment": {
-          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+        "outcome": "UNVERIFIABLE",
+        "score": null,
+        "reasons": [
+          "REGISTRATION_FAILED"
+        ],
+        "explanation": "Recapture the seal from a similar angle with its full pattern visible.",
+        "metrics": {
+          "keypoints_ref": 2200,
+          "keypoints_probe": 2200,
+          "good_matches": 235,
+          "inliers": 133,
+          "inlier_ratio": 0.566,
+          "registration_basis": null,
+          "registration_failure": "PROBE_INLIER_VERTICAL_SPAN",
+          "anchor_good_matches": 22,
+          "anchor_inliers": null,
+          "anchor_registration_failure": "TOO_FEW_MATCHES",
+          "surrounding_support": false,
+          "center_shift_ratio": null,
+          "frame_shift_ratio": null,
+          "ssim": null,
+          "min_region_ssim": null,
+          "seam_coverage": null,
+          "thresholds": {
+            "min_inliers": 40,
+            "intact_ssim": 0.72,
+            "suspicious_ssim": 0.6,
+            "min_inlier_ratio": 0.4,
+            "min_seam_coverage": 0.9,
+            "regional_suspicious_ssim": 0.44999999999999996,
+            "max_unanchored_center_shift": 0.02,
+            "max_unanchored_frame_shift": 0.06
+          }
+        },
+        "quality_gate": {
           "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
+          "failures": [
+            "REGISTRATION_FAILED"
           ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
-            "status": 422,
-            "details": {
-              "component": "seal_vision",
-              "image": "reference",
-              "remediation": "Capture a new JPEG or PNG seal image."
+          "width": 6144,
+          "height": 7184,
+          "blur_laplacian_var": 711.3,
+          "glare_ratio": 0.0,
+          "dark_ratio": 0.0033,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "dark_max": 0.65,
+            "min_long_side": 320,
+            "min_short_side": 240
+          },
+          "reference": {
+            "passed": true,
+            "failures": [],
+            "width": 8192,
+            "height": 6144,
+            "blur_laplacian_var": 662.7,
+            "glare_ratio": 0.0,
+            "dark_ratio": 0.0008,
+            "thresholds": {
+              "blur_min": 80.0,
+              "glare_max": 0.12,
+              "dark_max": 0.65,
+              "min_long_side": 320,
+              "min_short_side": 240
             }
           }
         },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
-        "explanation": null,
-        "metrics": null
+        "classification": "UNVERIFIABLE",
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "repositioned.jpg",
@@ -766,35 +3070,86 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 9126575,
+          "format": "JPEG",
           "declared_width": 6144,
           "declared_height": 8192,
           "declared_pixels": 50331648,
-          "jpeg_bytes_after_last_eoi_sequence": 513
+          "jpeg_trailing_bytes": 513
         },
-        "standalone_assessment": {
-          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+        "outcome": "UNVERIFIABLE",
+        "score": null,
+        "reasons": [
+          "REGISTRATION_FAILED"
+        ],
+        "explanation": "Recapture the seal from a similar angle with its full pattern visible.",
+        "metrics": {
+          "keypoints_ref": 2200,
+          "keypoints_probe": 2200,
+          "good_matches": 366,
+          "inliers": 191,
+          "inlier_ratio": 0.522,
+          "registration_basis": null,
+          "registration_failure": "PROBE_INLIER_VERTICAL_SPAN",
+          "anchor_good_matches": 9,
+          "anchor_inliers": null,
+          "anchor_registration_failure": "TOO_FEW_MATCHES",
+          "surrounding_support": false,
+          "center_shift_ratio": null,
+          "frame_shift_ratio": null,
+          "ssim": null,
+          "min_region_ssim": null,
+          "seam_coverage": null,
+          "thresholds": {
+            "min_inliers": 40,
+            "intact_ssim": 0.72,
+            "suspicious_ssim": 0.6,
+            "min_inlier_ratio": 0.4,
+            "min_seam_coverage": 0.9,
+            "regional_suspicious_ssim": 0.44999999999999996,
+            "max_unanchored_center_shift": 0.02,
+            "max_unanchored_frame_shift": 0.06
+          }
+        },
+        "quality_gate": {
           "passed": false,
-          "reasons": [
-            "INVALID_IMAGE"
+          "failures": [
+            "REGISTRATION_FAILED"
           ],
-          "error": {
-            "code": "INVALID_IMAGE",
-            "message": "The reference is not a complete, opaque JPEG or PNG within the image limits.",
-            "status": 422,
-            "details": {
-              "component": "seal_vision",
-              "image": "reference",
-              "remediation": "Capture a new JPEG or PNG seal image."
+          "width": 6144,
+          "height": 8192,
+          "blur_laplacian_var": 621.9,
+          "glare_ratio": 0.0,
+          "dark_ratio": 0.0002,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "dark_max": 0.65,
+            "min_long_side": 320,
+            "min_short_side": 240
+          },
+          "reference": {
+            "passed": true,
+            "failures": [],
+            "width": 8192,
+            "height": 6144,
+            "blur_laplacian_var": 662.7,
+            "glare_ratio": 0.0,
+            "dark_ratio": 0.0008,
+            "thresholds": {
+              "blur_min": 80.0,
+              "glare_max": 0.12,
+              "dark_max": 0.65,
+              "min_long_side": 320,
+              "min_short_side": 240
             }
           }
         },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
-        "explanation": null,
-        "metrics": null
+        "classification": "UNVERIFIABLE",
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
       },
       {
         "file": "bad_light.jpg",
@@ -807,13 +3162,118 @@
         "evidence_source": "PRERECORDED_EVAL",
         "input_metadata": {
           "size_bytes": 4544620,
+          "format": "JPEG",
           "declared_width": 7472,
           "declared_height": 6144,
           "declared_pixels": 45907968,
-          "jpeg_bytes_after_last_eoi_sequence": 3921
+          "jpeg_trailing_bytes": 3921
         },
-        "standalone_assessment": {
-          "check": "SEAL_WHOLE_FRAME_REFERENCE_ASSESSMENT",
+        "outcome": "UNVERIFIABLE",
+        "score": null,
+        "reasons": [
+          "IMAGE_QUALITY_BLUR",
+          "IMAGE_QUALITY_DARK"
+        ],
+        "explanation": "Capture a sharper, evenly lit seal image at the required resolution.",
+        "metrics": {
+          "keypoints_ref": 0,
+          "keypoints_probe": 0,
+          "good_matches": 0,
+          "inliers": 0,
+          "inlier_ratio": 0.0,
+          "registration_basis": null,
+          "registration_failure": null,
+          "anchor_good_matches": null,
+          "anchor_inliers": null,
+          "anchor_registration_failure": null,
+          "surrounding_support": null,
+          "center_shift_ratio": null,
+          "frame_shift_ratio": null,
+          "ssim": null,
+          "min_region_ssim": null,
+          "seam_coverage": null,
+          "thresholds": {
+            "min_inliers": 40,
+            "intact_ssim": 0.72,
+            "suspicious_ssim": 0.6,
+            "min_inlier_ratio": 0.4,
+            "min_seam_coverage": 0.9,
+            "regional_suspicious_ssim": 0.44999999999999996,
+            "max_unanchored_center_shift": 0.02,
+            "max_unanchored_frame_shift": 0.06
+          }
+        },
+        "quality_gate": {
+          "passed": false,
+          "failures": [
+            "IMAGE_QUALITY_BLUR",
+            "IMAGE_QUALITY_DARK"
+          ],
+          "width": 7472,
+          "height": 6144,
+          "blur_laplacian_var": 7.6,
+          "glare_ratio": 0.0,
+          "dark_ratio": 0.906,
+          "thresholds": {
+            "blur_min": 80.0,
+            "glare_max": 0.12,
+            "dark_max": 0.65,
+            "min_long_side": 320,
+            "min_short_side": 240
+          },
+          "reference": {
+            "passed": true,
+            "failures": [],
+            "width": 8192,
+            "height": 6144,
+            "blur_laplacian_var": 662.7,
+            "glare_ratio": 0.0,
+            "dark_ratio": 0.0008,
+            "thresholds": {
+              "blur_min": 80.0,
+              "glare_max": 0.12,
+              "dark_max": 0.65,
+              "min_long_side": 320,
+              "min_short_side": 240
+            }
+          }
+        },
+        "classification": "UNVERIFIABLE",
+        "comparison_state": "FAILED",
+        "artifacts": {
+          "aligned_png": false,
+          "diff_png": false
+        }
+      }
+    ],
+    "manifest_sha256": "6c23d15e244673ce41517bb977fbfcae4cebc808a7010a7dae7b2ea0dea7395c",
+    "capture_set_sha256": "1c52cca8bf189d93480fd895d3e71aa61dc2f1b2b85eb7bf64c1bfee379ede41",
+    "admission_comparison": {
+      "source": {
+        "commit": "1ea34ab1fc7e0833cadd71e5d831d9c0425a9118",
+        "path": "datasets/vision_eval.json",
+        "report_version": 2
+      },
+      "before": {
+        "method_version": "seal-orb-ssim-0.2",
+        "manifest_sha256": "6c23d15e244673ce41517bb977fbfcae4cebc808a7010a7dae7b2ea0dea7395c",
+        "capture_set_sha256": "1c52cca8bf189d93480fd895d3e71aa61dc2f1b2b85eb7bf64c1bfee379ede41",
+        "thresholds": {
+          "min_inliers": 40,
+          "intact_ssim": 0.72,
+          "suspicious_ssim": 0.6,
+          "roi": null,
+          "blur_min": 80.0,
+          "glare_max": 0.12
+        },
+        "input_limits": {
+          "max_bytes": 10485760,
+          "max_pixels": 24000000,
+          "max_side": 8192
+        },
+        "comparison_status": "BLOCKED_REFERENCE",
+        "reference_admission": {
+          "check": "SEAL_ENROLLMENT",
           "passed": false,
           "reasons": [
             "INVALID_IMAGE"
@@ -829,14 +3289,872 @@
             }
           }
         },
-        "outcome": "NOT_EVALUATED",
-        "score": null,
-        "reasons": [
-          "REFERENCE_UNUSABLE"
-        ],
-        "explanation": null,
-        "metrics": null
+        "totals": {
+          "n": 4,
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 0,
+          "not_evaluated": 4,
+          "false_accepts": 0,
+          "false_rejects": 0
+        },
+        "reference_sha256": "52934438b2772d382cd2d099d2533cc8cd0aae6497a6d06ff8a73bd1273bebc7"
+      },
+      "after": {
+        "reference_admitted": true,
+        "comparison_status": "COMPLETED",
+        "totals": {
+          "n": 4,
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 4,
+          "not_evaluated": 0,
+          "false_accepts": 0,
+          "false_rejects": 0
+        }
+      },
+      "capture_diagnostics": {
+        "jpeg_with_trailing_bytes": 5,
+        "above_previous_pixel_limit": 5
       }
-    ]
+    },
+    "alternative_evaluations": {
+      "enrollment_seam_roi": {
+        "method_version": "seal-orb-ssim-0.2",
+        "score_name": "ssim",
+        "thresholds": {
+          "min_inliers": 40,
+          "intact_ssim": 0.72,
+          "suspicious_ssim": 0.6,
+          "roi": [
+            1536,
+            1950,
+            5800,
+            1350
+          ],
+          "blur_min": 80.0,
+          "glare_max": 0.12
+        },
+        "threshold_status": "PROVISIONAL",
+        "threshold_choice": {
+          "compare_to": "primary",
+          "overrides": {
+            "roi": [
+              1536,
+              1950,
+              5800,
+              1350
+            ]
+          },
+          "basis": "The patterned tape on the enrollment image defines the seam ROI.",
+          "selection": "Measured on the enrollment image before comparing recapture scores.",
+          "coordinates": "Orientation-corrected reference pixels [x, y, width, height]."
+        },
+        "comparison_status": "COMPLETED",
+        "reference": {
+          "admission": {
+            "check": "SEAL_ENROLLMENT",
+            "passed": true,
+            "reasons": [],
+            "quality_gate": {
+              "passed": true,
+              "failures": [],
+              "width": 8192,
+              "height": 6144,
+              "blur_laplacian_var": 662.7,
+              "glare_ratio": 0.0,
+              "dark_ratio": 0.0008,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.12,
+                "dark_max": 0.65,
+                "min_long_side": 320,
+                "min_short_side": 240
+              }
+            },
+            "keypoints": 2200,
+            "usable": true
+          },
+          "self_check": {
+            "check": "SEAL_SELF_COMPARISON",
+            "outcome": "ACCEPTED",
+            "score": 1.0,
+            "reasons": [],
+            "explanation": "The registered seam matches the reference with SSIM 1.00.",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 1417,
+              "inliers": 1417,
+              "inlier_ratio": 1.0,
+              "registration_basis": "OUTSIDE_SEAM",
+              "registration_failure": null,
+              "anchor_good_matches": 1417,
+              "anchor_inliers": 1417,
+              "anchor_registration_failure": null,
+              "surrounding_support": true,
+              "center_shift_ratio": 0.0,
+              "frame_shift_ratio": 0.0,
+              "ssim": 1.0,
+              "min_region_ssim": 1.0,
+              "seam_coverage": 1.0,
+              "thresholds": {
+                "min_inliers": 40,
+                "intact_ssim": 0.72,
+                "suspicious_ssim": 0.6,
+                "min_inlier_ratio": 0.4,
+                "min_seam_coverage": 0.9,
+                "regional_suspicious_ssim": 0.44999999999999996,
+                "max_unanchored_center_shift": 0.02,
+                "max_unanchored_frame_shift": 0.06
+              }
+            },
+            "quality_gate": {
+              "passed": true,
+              "failures": [],
+              "width": 8192,
+              "height": 6144,
+              "blur_laplacian_var": 662.7,
+              "glare_ratio": 0.0,
+              "dark_ratio": 0.0008,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.12,
+                "dark_max": 0.65,
+                "min_long_side": 320,
+                "min_short_side": 240
+              },
+              "reference": {
+                "passed": true,
+                "failures": [],
+                "width": 8192,
+                "height": 6144,
+                "blur_laplacian_var": 662.7,
+                "glare_ratio": 0.0,
+                "dark_ratio": 0.0008,
+                "thresholds": {
+                  "blur_min": 80.0,
+                  "glare_max": 0.12,
+                  "dark_max": 0.65,
+                  "min_long_side": 320,
+                  "min_short_side": 240
+                }
+              }
+            },
+            "classification": "INTACT",
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          "file": "enroll.jpg"
+        },
+        "conditions": {
+          "intact_recapture": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "torn": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "repositioned": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "bad_light": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          }
+        },
+        "totals": {
+          "n": 4,
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 4,
+          "not_evaluated": 0,
+          "false_accepts": 0,
+          "false_rejects": 0
+        },
+        "performance": {
+          "comparison_coverage": {
+            "count": 4,
+            "denominator": 4,
+            "ratio": 1.0
+          },
+          "numeric_score_coverage": {
+            "count": 0,
+            "denominator": 4,
+            "ratio": 0.0
+          },
+          "decision_coverage": {
+            "count": 0,
+            "denominator": 4,
+            "ratio": 0.0
+          },
+          "false_accept_rate": {
+            "count": 0,
+            "denominator": 3,
+            "ratio": 0.0
+          },
+          "false_reject_rate": {
+            "count": 0,
+            "denominator": 1,
+            "ratio": 0.0
+          },
+          "comparison_states": {
+            "FAILED": 4
+          },
+          "failure_reasons": {
+            "REGISTRATION_FAILED": 3,
+            "IMAGE_QUALITY_BLUR": 1,
+            "IMAGE_QUALITY_DARK": 1
+          },
+          "score_ranges_by_condition": {
+            "intact_recapture": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "torn": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "repositioned": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "bad_light": {
+              "n": 0,
+              "min": null,
+              "max": null
+            }
+          }
+        },
+        "results": [
+          {
+            "file": "intact_recapture.jpg",
+            "label": "intact_recapture",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "REGISTRATION_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "REGISTRATION_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 307,
+              "inliers": 268,
+              "inlier_ratio": 0.873,
+              "registration_basis": "DISTRIBUTED_FRAME",
+              "registration_failure": "UNANCHORED_FRAME_SHIFT",
+              "anchor_good_matches": 33,
+              "anchor_inliers": null,
+              "anchor_registration_failure": "TOO_FEW_MATCHES",
+              "surrounding_support": false,
+              "center_shift_ratio": 0.0531,
+              "frame_shift_ratio": 0.2324,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": 1.0
+            },
+            "explanation": "Recapture with more of the surrounding box visible so the seal alignment can be verified.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "torn.jpg",
+            "label": "torn",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "REGISTRATION_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "REGISTRATION_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 235,
+              "inliers": 133,
+              "inlier_ratio": 0.566,
+              "registration_basis": null,
+              "registration_failure": "PROBE_INLIER_VERTICAL_SPAN",
+              "anchor_good_matches": 24,
+              "anchor_inliers": null,
+              "anchor_registration_failure": "TOO_FEW_MATCHES",
+              "surrounding_support": false,
+              "center_shift_ratio": null,
+              "frame_shift_ratio": null,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": null
+            },
+            "explanation": "Recapture the seal from a similar angle with its full pattern visible.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "repositioned.jpg",
+            "label": "repositioned",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "REGISTRATION_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "REGISTRATION_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 366,
+              "inliers": 191,
+              "inlier_ratio": 0.522,
+              "registration_basis": null,
+              "registration_failure": "PROBE_INLIER_VERTICAL_SPAN",
+              "anchor_good_matches": 25,
+              "anchor_inliers": null,
+              "anchor_registration_failure": "TOO_FEW_MATCHES",
+              "surrounding_support": false,
+              "center_shift_ratio": null,
+              "frame_shift_ratio": null,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": null
+            },
+            "explanation": "Recapture the seal from a similar angle with its full pattern visible.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "bad_light.jpg",
+            "label": "bad_light",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "IMAGE_QUALITY_BLUR",
+                "IMAGE_QUALITY_DARK"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_BLUR",
+              "IMAGE_QUALITY_DARK"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 0,
+              "keypoints_probe": 0,
+              "good_matches": 0,
+              "inliers": 0,
+              "inlier_ratio": 0.0,
+              "registration_basis": null,
+              "registration_failure": null,
+              "anchor_good_matches": null,
+              "anchor_inliers": null,
+              "anchor_registration_failure": null,
+              "surrounding_support": null,
+              "center_shift_ratio": null,
+              "frame_shift_ratio": null,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": null
+            },
+            "explanation": "Capture a sharper, evenly lit seal image at the required resolution.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          }
+        ],
+        "changes_from_comparator": {
+          "accepted": 0,
+          "flagged": 0,
+          "unverifiable": 0,
+          "false_accepts": 0,
+          "false_rejects": 0
+        }
+      },
+      "retrospective_lower_inlier_floor": {
+        "method_version": "seal-orb-ssim-0.2",
+        "score_name": "ssim",
+        "thresholds": {
+          "min_inliers": 24,
+          "intact_ssim": 0.72,
+          "suspicious_ssim": 0.6,
+          "roi": [
+            1536,
+            1950,
+            5800,
+            1350
+          ],
+          "blur_min": 80.0,
+          "glare_max": 0.12
+        },
+        "threshold_status": "PROVISIONAL",
+        "threshold_choice": {
+          "compare_to": "enrollment_seam_roi",
+          "overrides": {
+            "min_inliers": 24
+          },
+          "basis": "Sensitivity trial with the same measured seam geometry and a lower minimum inlier count.",
+          "validation_scope": "Retrospective comparison on the recorded seal captures. This profile is for offline evaluation.",
+          "disposition": "REJECTED"
+        },
+        "comparison_status": "COMPLETED",
+        "reference": {
+          "admission": {
+            "check": "SEAL_ENROLLMENT",
+            "passed": true,
+            "reasons": [],
+            "quality_gate": {
+              "passed": true,
+              "failures": [],
+              "width": 8192,
+              "height": 6144,
+              "blur_laplacian_var": 662.7,
+              "glare_ratio": 0.0,
+              "dark_ratio": 0.0008,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.12,
+                "dark_max": 0.65,
+                "min_long_side": 320,
+                "min_short_side": 240
+              }
+            },
+            "keypoints": 2200,
+            "usable": true
+          },
+          "self_check": {
+            "check": "SEAL_SELF_COMPARISON",
+            "outcome": "ACCEPTED",
+            "score": 1.0,
+            "reasons": [],
+            "explanation": "The registered seam matches the reference with SSIM 1.00.",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 1417,
+              "inliers": 1417,
+              "inlier_ratio": 1.0,
+              "registration_basis": "OUTSIDE_SEAM",
+              "registration_failure": null,
+              "anchor_good_matches": 1417,
+              "anchor_inliers": 1417,
+              "anchor_registration_failure": null,
+              "surrounding_support": true,
+              "center_shift_ratio": 0.0,
+              "frame_shift_ratio": 0.0,
+              "ssim": 1.0,
+              "min_region_ssim": 1.0,
+              "seam_coverage": 1.0,
+              "thresholds": {
+                "min_inliers": 24,
+                "intact_ssim": 0.72,
+                "suspicious_ssim": 0.6,
+                "min_inlier_ratio": 0.4,
+                "min_seam_coverage": 0.9,
+                "regional_suspicious_ssim": 0.44999999999999996,
+                "max_unanchored_center_shift": 0.02,
+                "max_unanchored_frame_shift": 0.06
+              }
+            },
+            "quality_gate": {
+              "passed": true,
+              "failures": [],
+              "width": 8192,
+              "height": 6144,
+              "blur_laplacian_var": 662.7,
+              "glare_ratio": 0.0,
+              "dark_ratio": 0.0008,
+              "thresholds": {
+                "blur_min": 80.0,
+                "glare_max": 0.12,
+                "dark_max": 0.65,
+                "min_long_side": 320,
+                "min_short_side": 240
+              },
+              "reference": {
+                "passed": true,
+                "failures": [],
+                "width": 8192,
+                "height": 6144,
+                "blur_laplacian_var": 662.7,
+                "glare_ratio": 0.0,
+                "dark_ratio": 0.0008,
+                "thresholds": {
+                  "blur_min": 80.0,
+                  "glare_max": 0.12,
+                  "dark_max": 0.65,
+                  "min_long_side": 320,
+                  "min_short_side": 240
+                }
+              }
+            },
+            "classification": "INTACT",
+            "comparison_state": "SCORED",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          "file": "enroll.jpg"
+        },
+        "conditions": {
+          "intact_recapture": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 1,
+            "unverifiable": 0,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 1
+          },
+          "torn": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "repositioned": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          },
+          "bad_light": {
+            "n": 1,
+            "accepted": 0,
+            "flagged": 0,
+            "unverifiable": 1,
+            "not_evaluated": 0,
+            "false_accepts": 0,
+            "false_rejects": 0
+          }
+        },
+        "totals": {
+          "n": 4,
+          "accepted": 0,
+          "flagged": 1,
+          "unverifiable": 3,
+          "not_evaluated": 0,
+          "false_accepts": 0,
+          "false_rejects": 1
+        },
+        "performance": {
+          "comparison_coverage": {
+            "count": 4,
+            "denominator": 4,
+            "ratio": 1.0
+          },
+          "numeric_score_coverage": {
+            "count": 1,
+            "denominator": 4,
+            "ratio": 0.25
+          },
+          "decision_coverage": {
+            "count": 1,
+            "denominator": 4,
+            "ratio": 0.25
+          },
+          "false_accept_rate": {
+            "count": 0,
+            "denominator": 3,
+            "ratio": 0.0
+          },
+          "false_reject_rate": {
+            "count": 1,
+            "denominator": 1,
+            "ratio": 1.0
+          },
+          "comparison_states": {
+            "SCORED": 1,
+            "FAILED": 3
+          },
+          "failure_reasons": {
+            "REGISTRATION_FAILED": 2,
+            "IMAGE_QUALITY_BLUR": 1,
+            "IMAGE_QUALITY_DARK": 1
+          },
+          "score_ranges_by_condition": {
+            "intact_recapture": {
+              "n": 1,
+              "min": 0.276,
+              "max": 0.276
+            },
+            "torn": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "repositioned": {
+              "n": 0,
+              "min": null,
+              "max": null
+            },
+            "bad_light": {
+              "n": 0,
+              "min": null,
+              "max": null
+            }
+          }
+        },
+        "results": [
+          {
+            "file": "intact_recapture.jpg",
+            "label": "intact_recapture",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "REGISTRATION_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "FLAGGED",
+            "classification": "SUSPICIOUS",
+            "score": 0.276,
+            "reasons": [],
+            "comparison_state": "SCORED",
+            "quality_gate_changes": {
+              "passed": true,
+              "failures": []
+            },
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 33,
+              "inliers": 31,
+              "inlier_ratio": 0.939,
+              "registration_basis": "OUTSIDE_SEAM",
+              "registration_failure": null,
+              "anchor_good_matches": 33,
+              "anchor_inliers": 31,
+              "anchor_registration_failure": null,
+              "surrounding_support": true,
+              "center_shift_ratio": 0.0493,
+              "frame_shift_ratio": 0.2225,
+              "ssim": 0.276,
+              "min_region_ssim": -0.721,
+              "seam_coverage": 1.0
+            },
+            "explanation": "The registered seam differs from the reference (SSIM 0.28), so refer it for quality review.",
+            "artifacts": {
+              "aligned_png": true,
+              "diff_png": true
+            }
+          },
+          {
+            "file": "torn.jpg",
+            "label": "torn",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "REGISTRATION_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "REGISTRATION_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 235,
+              "inliers": 133,
+              "inlier_ratio": 0.566,
+              "registration_basis": null,
+              "registration_failure": "PROBE_INLIER_VERTICAL_SPAN",
+              "anchor_good_matches": 24,
+              "anchor_inliers": 22,
+              "anchor_registration_failure": "TOO_FEW_INLIERS",
+              "surrounding_support": false,
+              "center_shift_ratio": null,
+              "frame_shift_ratio": null,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": null
+            },
+            "explanation": "Recapture the seal from a similar angle with its full pattern visible.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "repositioned.jpg",
+            "label": "repositioned",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "REGISTRATION_FAILED"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "REGISTRATION_FAILED"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 2200,
+              "keypoints_probe": 2200,
+              "good_matches": 366,
+              "inliers": 191,
+              "inlier_ratio": 0.522,
+              "registration_basis": null,
+              "registration_failure": "PROBE_INLIER_VERTICAL_SPAN",
+              "anchor_good_matches": 25,
+              "anchor_inliers": 22,
+              "anchor_registration_failure": "TOO_FEW_INLIERS",
+              "surrounding_support": false,
+              "center_shift_ratio": null,
+              "frame_shift_ratio": null,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": null
+            },
+            "explanation": "Recapture the seal from a similar angle with its full pattern visible.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          },
+          {
+            "file": "bad_light.jpg",
+            "label": "bad_light",
+            "before": {
+              "outcome": "UNVERIFIABLE",
+              "classification": "UNVERIFIABLE",
+              "score": null,
+              "reasons": [
+                "IMAGE_QUALITY_BLUR",
+                "IMAGE_QUALITY_DARK"
+              ],
+              "comparison_state": "FAILED"
+            },
+            "outcome": "UNVERIFIABLE",
+            "classification": "UNVERIFIABLE",
+            "score": null,
+            "reasons": [
+              "IMAGE_QUALITY_BLUR",
+              "IMAGE_QUALITY_DARK"
+            ],
+            "comparison_state": "FAILED",
+            "metrics": {
+              "keypoints_ref": 0,
+              "keypoints_probe": 0,
+              "good_matches": 0,
+              "inliers": 0,
+              "inlier_ratio": 0.0,
+              "registration_basis": null,
+              "registration_failure": null,
+              "anchor_good_matches": null,
+              "anchor_inliers": null,
+              "anchor_registration_failure": null,
+              "surrounding_support": null,
+              "center_shift_ratio": null,
+              "frame_shift_ratio": null,
+              "ssim": null,
+              "min_region_ssim": null,
+              "seam_coverage": null
+            },
+            "explanation": "Capture a sharper, evenly lit seal image at the required resolution.",
+            "artifacts": {
+              "aligned_png": false,
+              "diff_png": false
+            }
+          }
+        ],
+        "changes_from_comparator": {
+          "accepted": 0,
+          "flagged": 1,
+          "unverifiable": -1,
+          "false_accepts": 0,
+          "false_rejects": 1
+        }
+      }
+    }
   }
 }
