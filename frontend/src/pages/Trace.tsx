@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ReactFlow, Background, Handle, Position, type Node, type Edge, type NodeProps } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Factory, Flame, Layers, Box, Package, Truck, Building2, BadgeCheck, Search, Siren, Timer } from 'lucide-react'
@@ -7,6 +7,7 @@ import { useAct, useGet } from '../api/hooks'
 import { API_MODE, api } from '../api/client'
 import { useAuth } from '../auth/auth'
 import type { NodeType, Recall, TraceGraph, TraceNode } from '../api/types'
+import { Bucket } from '../components/domain'
 import { Button, Card, CardHeader, Empty, ErrorBox, Field, Input, Mono, PageHeader, Pill, Spinner, Textarea, cx, toneOf, toneVar, fmtDateTime } from '../components/ui'
 
 const COLS: NodeType[] = ['SUPPLIER', 'HEAT', 'LOT', 'UNIT', 'PASSPORT', 'PACKAGE', 'SHIPMENT', 'CUSTOMER']
@@ -45,15 +46,6 @@ function layout(g: TraceGraph): { nodes: Node[]; edges: Edge[] } {
   return { nodes, edges }
 }
 
-function Bucket({ label, value, tone, note }: { label: string; value: number; tone: 'reject' | 'info' | 'hold' | 'neutral'; note: string }) {
-  return (
-    <div className="rounded-lg border border-line bg-surface p-3">
-      <div className="eyebrow">{label}</div>
-      <div className="num mt-1 text-[24px] font-medium leading-none" style={{ color: value && tone !== 'neutral' ? toneVar[tone] : undefined }}>{value}</div>
-      <div className="mt-1 text-[11px] text-muted">{note}</div>
-    </div>
-  )
-}
 
 function RecallPanel({ g }: { g: TraceGraph }) {
   const { can } = useAuth()
@@ -70,7 +62,7 @@ function RecallPanel({ g }: { g: TraceGraph }) {
       <div className="space-y-4 p-4">
         {!r && <div className="text-[12.5px] text-muted">Preview computes the exact affected set from recorded genealogy and movement events, without writing anything.</div>}
         {r && <>
-          {exec.data && <div className="rise rounded-lg bg-reject/10 px-3 py-2 text-[12.5px] text-reject">Quarantine executed by {r.executed_by} · {fmtDateTime(r.executed_at)} · {r.audit_event_ids.length} audit events written</div>}
+          {exec.data && <div className="rise flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-reject/10 px-3 py-2 text-[12.5px] text-reject"><span className="flex-1">Quarantine executed by {r.executed_by} · {fmtDateTime(r.executed_at)} · {r.audit_event_ids.length} audit events written</span><Link to={`/recalls/${r.id}`} className="font-medium underline underline-offset-2">Physical tasks & release →</Link></div>}
           <div className="grid grid-cols-2 gap-2">
             <Bucket label="Units" value={r.affected.units} tone="neutral" note={`${r.affected.passports_held} passports → HELD`} />
             <Bucket label="Blocked at plant" value={r.affected.blocked_at_plant.reduce((n, x) => n + x.units, 0)} tone="reject" note={`${r.affected.blocked_at_plant.length} packages · gate will refuse`} />

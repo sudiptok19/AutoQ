@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Activity, Boxes, ClipboardList, Gauge, Layers, LogOut, Menu, Moon, Network, PackageCheck, RotateCcw, ScanLine, Search, ShieldAlert, Sun, Truck, X, ChevronsUpDown } from 'lucide-react'
+import { Activity, Boxes, ClipboardList, FileText, Siren, Gauge, Layers, LogOut, Menu, Moon, Network, PackageCheck, RotateCcw, ScanLine, Search, ShieldAlert, Sun, Truck, X, ChevronsUpDown } from 'lucide-react'
 import { useAuth, ROLE_LABEL, DEV_USERS } from '../auth/auth'
 import { API_MODE, api } from '../api/client'
 import { useGet } from '../api/hooks'
@@ -17,9 +17,11 @@ const NAV: { group: string; items: { to: string; label: string; icon: ReactNode;
     { to: '/packing', label: 'Packing & seals', icon: <PackageCheck size={16} />, badge: s => s?.held_packages || undefined },
     { to: '/dispatch', label: 'Dispatch gate', icon: <Truck size={16} /> },
     { to: '/trace', label: 'Trace & recall', icon: <Network size={16} /> },
+    { to: '/recalls', label: 'Recalls & tasks', icon: <Siren size={16} />, badge: s => s?.open_tasks || undefined },
   ] },
   { group: 'Insight', items: [
     { to: '/spc', label: 'Drift monitor', icon: <Activity size={16} />, badge: s => s?.open_alerts || undefined },
+    { to: '/reports', label: '8D reports', icon: <FileText size={16} /> },
     { to: '/audit', label: 'Audit chain', icon: <ClipboardList size={16} /> },
   ] },
 ]
@@ -93,7 +95,8 @@ export function AppShell() {
   const { can, unverified } = useAuth()
   const [mobileNav, setMobileNav] = useState(false)
   const loc = useLocation(); const qc = useQueryClient()
-  useEffect(() => setMobileNav(false), [loc.pathname])
+  const mainRef = useRef<HTMLElement>(null)
+  useEffect(() => { setMobileNav(false); mainRef.current?.scrollTo({ top: 0 }) }, [loc.pathname])
   const { data: summary } = useGet<DashboardSummary>('/dashboard/summary', { refetchInterval: 8000 })
   const reset = async () => { if (confirm('Reset all demo data to the seed scenario?')) { await api.post('/demo/reset'); qc.invalidateQueries() } }
 
@@ -153,7 +156,7 @@ export function AppShell() {
             <UserMenu />
           </div>
         </header>
-        <main className="grid-bg flex-1 overflow-y-auto">
+        <main ref={mainRef} className="grid-bg flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[1400px] px-4 py-6 lg:px-8 lg:py-8"><Outlet /></div>
         </main>
       </div>

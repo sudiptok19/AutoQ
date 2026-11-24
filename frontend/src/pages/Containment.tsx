@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Cog, HardHat, Package2, ScrollText, ShieldAlert, ShieldCheck, Plus } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Cog, FileText, HardHat, Package2, ScrollText, ShieldAlert, ShieldCheck, Plus } from 'lucide-react'
 import { useAct, useGet } from '../api/hooks'
 import { api } from '../api/client'
 import { useAuth } from '../auth/auth'
@@ -66,6 +66,8 @@ function ContainmentCard({ c, ev, units, lines }: { c: Containment; ev?: FourMEv
   const recheck = c.obligations.find(o => o.type === 'RECHECK_UNIT')
   const allMet = c.obligations.every(o => o.completed >= o.required)
   const active = c.status === 'ACTIVE'
+  const nav = useNavigate()
+  const draft = useAct(() => api.post<{ id: string }>('/reports/8d', { source: { type: 'FOUR_M', id: c.event_id } }))
   return (
     <Card className={cx(active && 'border-hold/40')}>
       <div className="flex flex-wrap items-start gap-3 border-b border-line px-4 py-3">
@@ -75,7 +77,9 @@ function ContainmentCard({ c, ev, units, lines }: { c: Containment; ev?: FourMEv
           <div className="mt-1 text-[13px]">{ev?.description}</div>
           <div className="mt-0.5 text-[11.5px] text-muted">“{ev?.reason}” — {ev?.created_by}, {fmtDateTime(ev?.created_at)}</div>
         </div>
+        {can('quality_engineer', 'quality_manager') && <Button size="sm" loading={draft.isPending} onClick={() => draft.mutate(undefined, { onSuccess: r => nav(`/reports/${r.id}`) })}><FileText size={13} /> Draft 8D</Button>}
       </div>
+      {draft.error && <div className="px-4 pt-3"><ErrorBox error={draft.error} /></div>}
       <div className="grid gap-px bg-line md:grid-cols-3">
         <div className="bg-surface p-4">
           <div className="eyebrow mb-2">Obligations</div>

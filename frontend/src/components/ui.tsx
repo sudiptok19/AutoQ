@@ -14,7 +14,7 @@ export const toneVar: Record<Tone, string> = {
 }
 
 const STATUS_TONE: Record<string, Tone> = {
-  PASS: 'pass', ACTIVE: 'pass', ACCEPTED: 'pass', INTACT: 'pass', CLEARED: 'pass', SEALED: 'info', DELIVERED: 'pass', APPROVED: 'pass', READY: 'pass', OK: 'pass',
+  PASS: 'pass', ACTIVE: 'pass', ACCEPTED: 'pass', INTACT: 'pass', CLEARED: 'pass', SEALED: 'info', DELIVERED: 'pass', APPROVED: 'pass', RELEASED: 'pass', COMPLETED: 'pass', READY: 'pass', OK: 'pass',
   HOLD: 'hold', HELD: 'hold', CONTAINMENT_ACTIVE: 'hold', SEAL_REVIEW: 'hold', SUSPICIOUS: 'reject', UNVERIFIABLE: 'hold', WARN: 'hold', COLLECTING: 'hold', DRAFT: 'hold',
   REJECT: 'reject', REVOKED: 'reject', BLOCKED: 'reject', FAIL: 'reject', QUARANTINED: 'reject', CONFLICT: 'reject',
   PROVISIONAL_OFFLINE: 'prov', PROVISIONAL_ACCEPT: 'prov',

@@ -17,6 +17,8 @@ const Dispatch = lazy(() => import('./pages/Dispatch'))
 const Trace = lazy(() => import('./pages/Trace'))
 const Spc = lazy(() => import('./pages/Spc'))
 const Audit = lazy(() => import('./pages/Audit'))
+const Recalls = lazy(() => import('./pages/Recalls'))
+const Reports = lazy(() => import('./pages/Reports'))
 const UnitPage = lazy(() => import('./pages/UnitPage'))
 const Scanner = lazy(() => import('./pages/Scanner'))
 
@@ -41,6 +43,10 @@ function Gate() {
           <Route path="dispatch" element={<Dispatch />} />
           <Route path="trace" element={<Trace />} />
           <Route path="spc" element={<Spc />} />
+          <Route path="recalls" element={<Recalls />} />
+          <Route path="recalls/:id" element={<Recalls />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="reports/:id" element={<Reports />} />
           <Route path="audit" element={<Audit />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Route>

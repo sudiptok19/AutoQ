@@ -99,6 +99,15 @@ export interface RecallImpact {
 export interface Recall {
   id: string; scope: { type: ScopeType; id: string; label: string }; reason: string; executed_by: string | null; executed_at: string | null
   query_ms: number; affected: RecallImpact; evidence: { genealogy_query: string; as_of: string }; audit_event_ids: string[]; preview?: boolean
+  unit_counts?: { at_plant: number; loaded_not_departed: number; in_transit: number; delivered: number }
+  segregation_tasks?: SegregationTask[]; released_at?: string | null; released_by?: string | null; release_reason?: string | null
+}
+export type TaskType = 'REMOVAL_REQUIRED' | 'IN_TRANSIT_RECALL' | 'NOTIFY_CUSTOMER' | (string & {})
+export interface SegregationTask {
+  id: string; type: TaskType; status: 'OPEN' | 'COMPLETED'; reason: string
+  package_id: string | null; package_label: string | null; shipment_id: string | null; shipment_code: string | null
+  recall_id: string | null; scan_id: string | null; consignee_action: Record<string, any> | null; created_at: string
+  completed_by: string | null; completed_at: string | null; completion_reason: string | null
 }
 
 export interface SpcPoint { inspection_id: string; t: string; score: number; z: number; cusum: number; synthetic: boolean }
@@ -113,11 +122,19 @@ export interface AuditEvent { id: string; seq: number; at: string; actor: string
 
 export interface DashboardSummary {
   units_by_status: Record<QualityStatus, number>; active_containments: number; held_packages: number; open_shipments: number
-  open_alerts: number; recent_scans: ScanDecision[]; dispatch_eligible_units: number; first_pass_yield: number | null
+  open_alerts: number; open_tasks?: number; recent_scans: ScanDecision[]; dispatch_eligible_units: number; first_pass_yield: number | null
 }
 
-export interface ReportItem { kind: 'FACT' | 'HYPOTHESIS' | 'PROPOSED' | 'PENDING_HUMAN'; text: string; evidence: { type: string; id: string; label: string }[] }
-export interface Report8D { id: string; status: 'DRAFT' | 'APPROVED'; source: { type: string; id: string }; generator: string; created_at: string; sections: { key: string; title: string; items: ReportItem[] }[]; approved_by: string | null; approved_at: string | null }
+export type ReportItemKind = 'FACT' | 'HYPOTHESIS' | 'PROPOSED' | 'PENDING_HUMAN'
+export interface ReportItem { kind: ReportItemKind; text: string; evidence: { type: string; id: string; label: string; sha256?: string | null }[] }
+export type ReportSource = 'RECALL' | 'FOUR_M' | 'ALERT'
+export interface Report8D {
+  id: string; revision_id: string; status: 'DRAFT' | 'APPROVED'; source_type: ReportSource; source_id: string; generator: string
+  created_at: string; as_of: string; counts: Record<string, number>; evidence_source: string; meta: { source_label?: string; [k: string]: any }
+  sections: { key: string; title: string; items: ReportItem[] }[]; approved_by: string | null; approved_at: string | null
+  snapshot_sha256: string; pdf_url: string; pdf_sha256: string | null; revisions: number
+}
+export interface UploadedEvidence { sha256: string; media_type: string; byte_size: number; url: string; evidence_source: string; purpose: string }
 
 export interface ApiError { code: string; message: string; details?: any; status: number }
 export interface Page<T> { items: T[]; next_cursor: string | null }

@@ -222,3 +222,14 @@ export function StackBar({ parts, height = 8 }: { parts: { value: number; color:
     </div>
   )
 }
+
+/** One recall impact bucket (units in a physical location class). */
+export function Bucket({ label, value, tone, note }: { label: string; value: number; tone: 'reject' | 'info' | 'hold' | 'neutral'; note: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-surface p-3">
+      <div className="eyebrow">{label}</div>
+      <div className="num mt-1 text-[24px] font-medium leading-none" style={{ color: value && tone !== 'neutral' ? toneVar[tone] : undefined }}>{value}</div>
+      <div className="mt-1 text-[11px] text-muted">{note}</div>
+    </div>
+  )
+}
