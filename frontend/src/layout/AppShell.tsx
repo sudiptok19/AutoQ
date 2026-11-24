@@ -90,7 +90,7 @@ function UserMenu() {
 
 export function AppShell() {
   const { dark, toggle } = useTheme()
-  const { can } = useAuth()
+  const { can, unverified } = useAuth()
   const [mobileNav, setMobileNav] = useState(false)
   const loc = useLocation(); const qc = useQueryClient()
   useEffect(() => setMobileNav(false), [loc.pathname])
@@ -148,6 +148,7 @@ export function AppShell() {
           <SearchBox />
           <div className="ml-auto flex items-center gap-2">
             {API_MODE === 'mock' && <Honesty kind="mock" />}
+            {unverified && <span title={`Server not reachable (${unverified}); showing the cached session until it can be re-verified.`}><Honesty kind="provisional">OFFLINE · ID UNVERIFIED</Honesty></span>}
             <button onClick={toggle} className="rounded-lg p-2 text-muted hover:bg-surface-2 hover:text-ink" aria-label="Toggle theme">{dark ? <Sun size={15} /> : <Moon size={15} />}</button>
             <UserMenu />
           </div>
