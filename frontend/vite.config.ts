@@ -37,7 +37,7 @@ export default defineConfig({
   ],
   server: {
     host: true,
-    proxy: { '/api': { target: 'http://localhost:8000', changeOrigin: true } },
+    proxy: { '/api': { target: `http://localhost:${process.env.AUTOQ_API_PORT ?? '8010'}`, changeOrigin: true } },
   },
   test: { environment: 'node' },
 } as any)
