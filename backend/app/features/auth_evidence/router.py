@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core import audit
-from app.core.auth import Principal, current_principal, require_roles
+from app.core.auth import Principal, current_principal, evidence_principal, require_roles
 from app.core.storage import get_evidence
 from app.db.session import get_db
 from app.features.auth_evidence import service
@@ -28,7 +28,7 @@ def me(p: Principal = Depends(current_principal)) -> dict:
 
 
 @router.get("/evidence/{sha256}", response_class=Response, responses={200: {"content": {"image/jpeg": {}, "image/png": {}, "application/pdf": {}}}})
-def evidence(sha256: str = Path(pattern=r"^[0-9a-f]{64}$"), db: Session = Depends(get_db), _: Principal = Depends(current_principal)) -> Response:
+def evidence(sha256: str = Path(pattern=r"^[0-9a-f]{64}$"), db: Session = Depends(get_db), _: Principal = Depends(evidence_principal)) -> Response:
     data, media_type = get_evidence(db, sha256)
     return Response(data, media_type=media_type, headers={"Cache-Control": "private, max-age=31536000, immutable", "ETag": f'"{sha256}"', "X-Content-Type-Options": "nosniff"})
 

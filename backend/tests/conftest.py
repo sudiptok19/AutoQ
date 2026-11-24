@@ -63,6 +63,8 @@ def clean_db(request):
     from scripts.seed_dev_users import seed
     with session_factory()() as db:
         db.execute(text("TRUNCATE " + ", ".join(t.name for t in Base.metadata.sorted_tables) + " RESTART IDENTITY CASCADE"))
+        for seq in ("package_label_seq", "shipment_code_seq"):       # free-standing sequences survive TRUNCATE
+            db.execute(text(f"ALTER SEQUENCE IF EXISTS {seq} RESTART WITH 1"))
         seed(db)
         db.commit()
     yield

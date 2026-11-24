@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Camera, Check, CircleSlash, FileImage, FlaskConical, Minus, TriangleAlert, Upload, X } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import type { GateCheck, Reason } from '../api/types'
-import { evidenceSrc } from '../api/client'
+import { API_MODE, api, evidenceSrc } from '../api/client'
 import { DEFAULT_GATE, canvasBlob, loadImageData, qualityGate, renderBracket, type FixtureKind } from '../lib/cv'
 import { Button, Honesty, Mono, Segmented, cx, toneVar } from './ui'
 
@@ -111,7 +111,14 @@ export function ImageCapture({ fixtures, kind, onCaptured, captured }: { fixture
   }
   const pickFixture = async (v: string) => {
     setFixture(v)
-    const canvas = kind === 'part' ? renderBracket(v as FixtureKind, Math.floor(Math.random() * 1000) + 11) : renderSeal(v)
+    const seed = Math.floor(Math.random() * 1000) + 11
+    if (API_MODE === 'live') {
+      // Live: the backend's own SYNTHETIC render family, which its demo profiles were calibrated on.
+      // A browser-drawn bracket would never register against the server's golden reference.
+      await finish(await api.blob(kind === 'part' ? `/demo/fixtures/part/${v}?seed=${seed}` : `/demo/fixtures/seal/${v}?seed=${seed}`), v)
+      return
+    }
+    const canvas = kind === 'part' ? renderBracket(v as FixtureKind, seed) : renderSeal(v)
     await finish(await canvasBlob(canvas), v)
   }
   useEffect(() => {
