@@ -95,7 +95,72 @@ The proxy's default upstreams are `host.docker.internal:8010` and `host.docker.i
 4. With offline snapshot and sync integrated, install the PWA, cache a valid live snapshot, reopen in airplane mode, and confirm the scanner can queue a provisional scan. Reconnect and confirm that sync reports the server outcome.
 5. During a disposable smoke test, stop one host upstream and request a path routed to it. Caddy should return HTTP 502 with a plain-text gateway error. Start the upstream again and confirm recovery.
 
-Physical-phone acceptance is pending. Record the phone model, OS, browser, LAN address, and results of the camera, health, WebSocket, and offline checks in the PR.
+### Physical phone verification · 24 November 2026
+
+Vivo X200t, OriginOS 7, Google Chrome 158.0.8127.42 (Official Build, 64-bit), with the gateway at `192.168.29.2`. The running `feature/astra-physical-eval` checkout served the live FastAPI and PostgreSQL stack through Caddy and a Vite production preview.
+
+| Check | Observed result |
+| --- | --- |
+| Phone TLS and redirect | Chrome loaded `https://192.168.29.2/scanner` without a certificate warning. The HTTP redirect returned 308. |
+| Live API and sign-in | `/api/v1/health` returned HTTP 200 with `status=ok`, `db=ok`, `key_kid=aq-dev-1`, `demo=false`. Dispatcher sign-in succeeded. |
+| Camera and online load | The physical phone opened the camera with native `BarcodeDetector` and decoded the signed `PKG-0001` QR displayed on the laptop. The scanner showed **LOAD ACCEPTED**, all 11 dispatch gates passed, and `SHP-0001` reached 1/1 server-confirmed units at 19:02:05 IST. |
+| WebSocket and ticket enforcement | The authenticated same-origin WebSocket received the `DISPATCH_STATE_CHANGED` frame with decision `ACCEPTED` and event ID `evt_01m86w3a34pwn2k8vxrhc8myqn`. Backend logs showed HTTP 403 during the upgrade for a missing ticket and for reuse of a consumed ticket. |
+| Upstream outage and recovery | Stopping FastAPI produced HTTP 502 through Caddy with this exact plain-text response: `AutoQ gateway could not reach its upstream.` Restarting FastAPI restored HTTP 200 through Caddy. |
+| Windows command-line TLS | Windows curl needed `--ssl-revoke-best-effort` because Schannel could not obtain revocation information for the local mkcert certificate. The phone Chrome session validated HTTPS without a warning. |
+
+The camera test used the live phone QR decoder. Seal enrollment and recheck used `SYNTHETIC_TEST` bytes. Physical seal detection remains unverified by this run.
+
+#### Persisted online event
+
+A read-only, repeatable-read PostgreSQL check matched `SHP-0001` (`shp_01m86tqywszhsx61q1erzgxbx1`), `PKG-0001` (`pkg_01m86tqyn66wmwawkjqfzda48r`) and client event `dev-162d92:000001`.
+
+- Scan `scan_01m86w3a2sdkf2pfq61mb430dk` was `ACCEPTED` at `2026-11-24T13:32:05.059268Z` by `disp.kiran`. It stored `offline=false`, `captured_at=NULL`, zero reasons and all 11 gate results as `PASS`. The duplicate gate reported “First accepted load,” the quantity gate reported “1 / 1 units,” and the seal gate cited the passing `INTACT` recheck `seal_01m86tqzbxd5cc6c8e1kg196v0` from 13:08:23 UTC.
+- Load `load_01m86w3a2xvdhjvef8sef0eyyc` references that scan and remains the single active load for the package. The package is `LOADED`. Shipment `SHP-0001` was `OPEN` with one package, one loaded unit, one expected unit and zero movement events. There was one matching scan across all shipments, one load, one audit row and one outbox row for the event.
+- Audit row `aud_01m86w3a330w2tkshm6604qfjk` recorded `LOAD_ACCEPTED` at sequence 30 and `13:32:05.091851Z`, with the client event ID, package and online flag. The audit hash chain verified through sequence 31 at the time of the check.
+- Outbox row `evt_01m86w3a34pwn2k8vxrhc8myqn` carried the same scan ID, package and accepted decision with severity `INFO`, zero reason codes and no siren. Its `sent_at` was `13:32:05.616827Z`, about 558 ms after the scan decision. The relay sets `sent_at` when it claims the row. The received WebSocket frame independently confirms delivery.
+
+#### Queue and upstream integration
+
+After the successful online scan, the phone showed one unsynced entry and an intact device chain. The scanner appends an `ONLINE` event to IndexedDB with the next sequence and hash before posting the scan. The REST response updates the queue entry to `ACCEPTED`, and the sync response supplies its `synced_at`. The count therefore reflects an outstanding device checkpoint. PostgreSQL had zero offline device events, snapshots or device checkpoint rows for `dev-162d92` at the time of verification. The phone queue and original accepted scan were preserved.
+
+The tested checkout predates the integrated offline endpoints. Fetched `origin/main` at `3dbdc2f` includes the original Caddy gateway (`ea10182`, PR #9), WebSocket integration (`b1cddf3`, PR #12), signed snapshot and scan sync (`b6535c8`, PR #21), PR #22 phone-JPEG work, cached offline identity (`9e599c2`, PR #23) and the live frontend adapter (`3a6fdd0`, PR #25). On that version, `GET /api/v1/offline/snapshot` registers the phone device and issues a signed snapshot. `POST /api/v1/sync/scans` reconciles the existing online load as `DUPLICATE` while advancing the device chain. The client keeps the original accepted decision for the already-recorded scan.
+
+Use a separate checkout for the upstream build. Keep the phone on the exact existing origin `https://192.168.29.2` so Chrome retains the same service-worker scope, auth storage and IndexedDB queue. Change only Caddy's upstream targets after preflight, keeping the certificate, database, evidence store and AQ1 signing key in place. The candidate reached the same database and served the same public signing key and seal bytes under an authenticated candidate login. The live database is at Alembic revision `0002_package_label_seq`, with no migration diff. The candidate's default JWT configuration returned 401 for the live bearer. Carry forward the live JWT settings and check `/api/v1/auth/me` with HTTP 200 before switching. If the settings differ, the dispatcher needs to sign in again at the same origin.
+
+#### LAN integration preflight · 25 November 2026
+
+PostgreSQL and Caddy restarted using the original containers and PostgreSQL volume. A read-only database check confirmed `SHP-0001` at 1/1, `SHP-0002` at 0/1, zero phone checkpoints, and a match between the existing AQ1 signing key and database public key.
+
+The integrated production preview is active on port 5173. A loopback request to Caddy with the original LAN TLS identity confirmed that `/scanner` and `/sw.js` exactly match the integrated build, with SHA-256 prefixes `c960480901ec510e` and `99954eafb34fb83f`. During staging, the laptop's Wi-Fi address changed from `192.168.29.2` to `10.144.220.247`, leaving the original phone origin unreachable over the LAN. The integrated FastAPI process awaits launch in the original PowerShell/JWT context. Caddy returned 502 for the health route during the loopback check. Restore the original Wi-Fi address, start FastAPI with the live configuration, and confirm health and dispatcher auth at the original origin before using the phone queue.
+
+#### Automated verification on the upstream build
+
+- Backend + disposable PostgreSQL 16, with `AUTOQ_DISABLE_RELAY=1`: `python -m pytest -v -p no:cacheprovider tests/test_offline_scanner.py` passed 7 tests in 64.30 seconds, with one Starlette/AnyIO deprecation warning. The run covered signed snapshot capacity and authorization, acceptance through the live dispatch gate, identical replay, rejection of a changed already-synced event and a chain gap without advancing the checkpoint, post-snapshot holds with durable segregation, two devices, a lost online response and shipment close.
+- Frontend: `npm.cmd test -- src/auth/session.test.ts src/scanner/offline.test.ts` passed 8 tests in 1.11 seconds. The run covered cached offline identity, genuine auth rejection and local provisional decisions.
+- A mobile-sized Chromium smoke test used the production PWA in a secure loopback context with real FastAPI and disposable PostgreSQL. Signed synthetic labels were submitted through the scanner controls. The online scan brought the shipment to 4/8 and left one device event pending. After Chromium networking was disabled, the second 4-unit scan stayed provisional and the server count remained at 4. An offline reload retained the signed snapshot, the dispatcher session marked `ID UNVERIFIED`, and both IndexedDB chain entries. Reconnecting revalidated dispatcher auth, and **Sync** processed two events and brought the server to 8/8 with two active loads and an empty queue.
+- Replaying the identical sync request returned `DUPLICATE` for both events, reflecting the original outcomes `DUPLICATE` for the previously accepted online event and `ACCEPTED` for the provisional event. The sequence remained 2, the head was unchanged and the load total remained 8. The shipment's snapshot advisory still showed one device after the UI's automatic snapshot refresh. This advisory tracks a newly issued snapshot and the local queue showed zero pending entries.
+
+#### Opus handoff
+
+- `frontend/src/pages/Scanner.tsx` submits one snapshot ID for the whole pending batch. For the phone test, reconcile the queue on the current shipment before selecting another shipment or refreshing the snapshot. For general use, retain the capture snapshot on each event or reconcile each shipment's pending batch with its associated snapshot.
+- `backend/app/features/offline_scanner/service.py` should require a snapshot for provisional events, bind it to the event shipment and operator, and validate the capture against its validity period. For first reconciliation of an already-recorded `ONLINE` scan, compare shipment and token with the persisted scan content fingerprint before linking it by client event ID. Keep the already-checkpointed replay comparison.
+- Clarify the snapshot advisory used by shipment close after the scanner automatically refreshes a snapshot. The advisory and IndexedDB queue count can legitimately diverge, as observed in the browser smoke test.
+
+#### Pending physical airplane-mode run
+
+Synthetic fixture `PKG-0002` (`pkg_01m86xdmecb9ws09x6gqnnx6de`) is sealed with one unit and zero active loads on order `SO-A7-261124-OFFLINE`. Its initial `SYNTHETIC_TEST` recheck `seal_01m86xdncqvsbwhr5ybphfsva2` was `INTACT` at `2026-11-24T13:55:12.643002Z` and aged out after 60 minutes. Shipment `SHP-0002` (`shp_01m86xdmy246dt7nha0y833yxc`) is open at 0/1. Refresh the recheck through the live API after the stack is reachable and within 60 minutes of syncing the physical test.
+
+1. After the original LAN health and dispatcher auth checks pass, open the existing phone PWA at `https://192.168.29.2/scanner` while online. Select `SHP-0001` in **Setup** and download its signed snapshot. Confirm **Queue** still shows event #1 for `PKG-0001` as `ACCEPTED` and that the unsynced count is one.
+2. In **Queue**, press **Sync 1 event(s)** while `SHP-0001` is selected. Verify that the original entry still reads `ACCEPTED`, the pending count falls to zero, and the shipment remains at 1/1. The server should report `DUPLICATE` for the existing scan and advance the device checkpoint to sequence 1. Continue after this entry is reconciled.
+3. Select `SHP-0002` in **Setup** and download a valid signed snapshot for it. Confirm the shipment is at 0/1. Enable airplane mode with Wi-Fi off and reopen the PWA. Verify the cached dispatcher session, then scan the laptop's signed `PKG-0002` QR with the phone camera. Expect **PROVISIONAL · LOAD** and queued sequence 2.
+4. Stay offline and dismiss the result using **tap to scan next**. Wait at least four seconds from the first decode, then scan the same QR again. Expect **DO NOT LOAD** (`LOCAL_BLOCK`) with `ALREADY_SCANNED_LOCALLY`. The quantity check may fail too. Confirm one provisional unit and two pending events, sequences 2 and 3.
+5. Reconnect and press **Sync 2 event(s)** with the `SHP-0002` snapshot selected. Record the two server outcomes and chain checkpoint. Expect `ACCEPTED` then `BLOCKED`, sequence 3, zero unsynced events, and 1/1 on both shipments with one active load each. The second physical capture tests duplicate loading. The exact-request replay test was verified separately in Chromium.
+
+A7 physical online verification is complete. Full physical acceptance remains pending the airplane-mode and duplicate-prevention checks above.
+
+#### Verification ownership
+
+Astra led the integration and independently verified the database, signing key, LAN TLS identity and candidate build through Caddy. GPT-6.2 Sol at High effort verified the persisted scan, prepared the synthetic fixture and drafted this report. GPT-6.2 Sol at Extra High effort ran the isolated backend, frontend and Chromium checks.
 
 ## Renew the leaf and remove test trust
 
