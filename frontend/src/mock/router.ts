@@ -547,7 +547,7 @@ function computeSpc(line: string, mv: string): SpcSeries {
   return series
 }
 r('GET', '/spc/series', ({ query }) => computeSpc(query.get('line_id') ?? 'line_2', query.get('method_version') ?? 'gd-0.3'))
-const openAlerts = () => S.lines.flatMap(l => { const ser = computeSpc(l.id, 'gd-0.3'); return ser.alerts.filter(a => !S.alerts_acked.includes(a.id)).map(a => ({ ...a, type: 'SPC_DRIFT', line_id: l.id, created_at: ser.points[a.at_index].t })) })
+const openAlerts = () => S.lines.flatMap(l => { const ser = computeSpc(l.id, 'gd-0.3'); return ser.alerts.filter(a => !S.alerts_acked.includes(a.id)).map(a => ({ ...a, type: 'SPC_DRIFT', line_id: l.id, created_at: ser.points[a.at_index ?? 0].t })) })
 r('GET', '/alerts', () => ({ items: openAlerts(), next_cursor: null }))
 r('POST', '/alerts/:id/ack', c => { const u = need(c, 'quality_engineer', 'quality_manager'); S.alerts_acked.push(c.params[0]); audit(u.username, 'ALERT_ACKNOWLEDGED', 'alert', c.params[0], c.body?.reason); save(); return { ok: true } })
 

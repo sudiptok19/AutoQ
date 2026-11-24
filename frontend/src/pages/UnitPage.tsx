@@ -47,7 +47,7 @@ export default function UnitPage() {
         <div className="space-y-6">
           <Card>
             <CardHeader eyebrow="Computed, never stored" title="Dispatch eligibility" />
-            <div className="p-4"><Reasons reasons={u.eligibility.blockers} empty={<div className="text-[13px] text-pass">All conditions met: PASS · passport active · no containment · not quarantined.</div>} /></div>
+            <div className="p-4"><Reasons reasons={u.eligibility.blockers} empty={<div className="text-[13px] text-pass">All conditions met: {(u as any).passport?.inspection_basis === 'SAMPLED_LOT' ? 'released on its lot sample (every sampled unit PASSED)' : 'PASS'} · passport active · no containment · not quarantined.</div>} /></div>
           </Card>
           <Card>
             <CardHeader eyebrow="Evidence" title={`Inspections (${u.inspections.length})`} />

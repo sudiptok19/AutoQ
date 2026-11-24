@@ -92,7 +92,7 @@ export default function Scanner() {
     if (!quiet) { setBusy('snapshot'); setMsg(null) }
     try {
       const [{ token }, { keys }, pk] = await Promise.all([
-        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}`),
+        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent((dev ?? await deviceInfo()).device_id)}`),
         api.get<{ keys: { kid: string; public_key: string; status: string }[] }>('/keys'),
         api.get<{ items: Package[] }>('/packages'),
       ])

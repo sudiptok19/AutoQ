@@ -4,7 +4,7 @@ import { ReactFlow, Background, Handle, Position, type Node, type Edge, type Nod
 import '@xyflow/react/dist/style.css'
 import { Factory, Flame, Layers, Box, Package, Truck, Building2, BadgeCheck, Search, Siren, Timer } from 'lucide-react'
 import { useAct, useGet } from '../api/hooks'
-import { api } from '../api/client'
+import { API_MODE, api } from '../api/client'
 import { useAuth } from '../auth/auth'
 import type { NodeType, Recall, TraceGraph, TraceNode } from '../api/types'
 import { Button, Card, CardHeader, Empty, ErrorBox, Field, Input, Mono, PageHeader, Pill, Spinner, Textarea, cx, toneOf, toneVar, fmtDateTime } from '../components/ui'
@@ -66,7 +66,7 @@ function RecallPanel({ g }: { g: TraceGraph }) {
   return (
     <Card className={cx(exec.data && 'border-reject/50')}>
       <CardHeader eyebrow="Blast radius" title={<span className="flex items-center gap-2"><Siren size={15} className="text-reject" /> Recall {g.root.label}</span>}
-        right={r && <span className="flex items-center gap-1 text-[11px] text-muted"><Timer size={11} /> {r.query_ms} ms (in-browser mock)</span>} />
+        right={r && <span className="flex items-center gap-1 text-[11px] text-muted"><Timer size={11} /> {r.query_ms} ms{API_MODE === 'mock' ? ' (in-browser mock)' : ' (PostgreSQL)'}</span>} />
       <div className="space-y-4 p-4">
         {!r && <div className="text-[12.5px] text-muted">Preview computes the exact affected set from recorded genealogy and movement events, without writing anything.</div>}
         {r && <>

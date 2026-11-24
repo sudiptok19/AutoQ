@@ -15,7 +15,7 @@ function SealEnroll({ pkg, onDone }: { pkg: PkgView; onDone: () => void }) {
   return (
     <div className="space-y-3">
       <div className="text-[12.5px] text-muted">Apply a patterned tamper-evident seal across the lid opening and photograph it squarely. The reference is stored by sha256 and the package label is signed.</div>
-      <ImageCapture kind="seal" fixtures={[{ value: 'intact', label: 'Seal reference', hint: 'synthetic patterned tape' }]} captured={cap} onCaptured={setCap} />
+      <ImageCapture kind="seal" fixtures={[{ value: 'enroll', label: 'Seal reference', hint: 'synthetic patterned tape' }]} captured={cap} onCaptured={setCap} />
       {act.error && <ErrorBox error={act.error} />}
       <Button variant="primary" className="w-full" disabled={!cap} loading={act.isPending} onClick={() => act.mutate(undefined, { onSuccess: onDone })}><Lock size={14} /> Enroll seal & sign label</Button>
     </div>
@@ -26,8 +26,12 @@ export default function Packing() {
   const { can } = useAuth()
   const { data: orders } = useGet<{ items: Order[] }>('/orders')
   const { data: customers } = useGet<{ items: Customer[] }>('/customers')
-  const [orderId, setOrderId] = useState('ord_1002')
-  const { data: pkgs } = useGet<{ items: PkgView[] }>(`/packages?order_id=${orderId}`)
+  const [picked, setOrderId] = useState<string | null>(null)
+  // Default: the mock's demo order if present, else the most recent order that still has an open package.
+  const { data: open } = useGet<{ items: PkgView[] }>('/packages')
+  const orderId = picked ?? orders?.items.find(o => o.id === 'ord_1002')?.id
+    ?? orders?.items.find(o => open?.items.some(p => p.order_id === o.id && p.state === 'OPEN'))?.id ?? orders?.items[0]?.id ?? ''
+  const { data: pkgs } = useGet<{ items: PkgView[] }>(orderId ? `/packages?order_id=${orderId}` : null)
   const { data: units } = useGet<{ items: Unit[] }>('/units')
   const [sel, setSel] = useState<string | null>(null)
   const [sealFor, setSealFor] = useState<PkgView | null>(null)

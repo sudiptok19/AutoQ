@@ -18,10 +18,24 @@ signed unit passport → sealed package → policy-gated dispatch → one-click 
 - `fixtures/images/` — real photo fixtures for CV tests
 - `e2e/` — Playwright demo journey
 
-## Run (once both halves exist)
+## Run
+
+**Live demo (real backend):**
 ```bash
 cp .env.example .env
-make db
-make backend      # http://localhost:8000/docs
-make frontend     # http://localhost:5173
+make db           # PostgreSQL 16 on :5433
+make migrate
+make keys         # dev Ed25519 signing key (once)
+make seed-demo    # wipes the LOCAL db and plays the demo story through the API (~20 s)
+make backend      # API on :8010 (docs at /docs)
+cd frontend && VITE_API_MODE=live npm run dev   # UI proxies /api to :8010
 ```
+Sign in with any dev account (password `autoq-dev`). The seed leaves:
+- **Dock demo:** shipment `SHP-0004` open at Dock 3. `PKG-0004` scans ACCEPTED; `PKG-0005` is blocked until a dispatcher rechecks its seal; `PKG-0006` has a torn seal and is in SEAL_REVIEW.
+- **Recall:** heat `H-7781` is ready to recall from Trace.
+- **Containment:** an active 4M containment on Line 3.
+- **SPC:** a drift alert on Line 2.
+
+All images and the profile calibration are **SYNTHETIC_TEST**, and the UI badges them. Seal rechecks expire after 60 min, so reseed shortly before presenting.
+
+**Mock mode (no backend):** `make frontend` runs everything in the browser against an in-memory mock API.
