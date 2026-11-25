@@ -157,6 +157,17 @@ def test_physical_inspection_report_evaluates_original_captures(tmp_path):
     defect = results["defect_02.jpg"]
     assert good["outcome"] == "ACCEPTED" and defect["outcome"] == "FLAGGED"
     assert good["score"] < defect["score"]
+    assert good["metrics"]["alignment"]["failure"] is None
+
+    off_center = results["good_01.jpg"]
+    alignment = off_center["metrics"]["alignment"]
+    assert off_center["reasons"] == ["ALIGNMENT_FAILED"] and off_center["score"] is None
+    assert alignment["failure"] == "LOW_FRAME_OVERLAP"
+    assert alignment["inliers"] >= alignment["thresholds"]["min_inliers"]
+    assert alignment["projected_probe_overlap"] < alignment["thresholds"]["min_overlap"]
+    assert alignment["reference_overlap"] >= alignment["thresholds"]["min_overlap"]
+    assert "usable_roi_pixels" not in alignment
+    assert off_center["artifacts"] == {"aligned_png": False, "diff_png": False}
     for name, reason in {"blurry_01.jpg": "IMAGE_QUALITY_BLUR", "misaligned_01.jpg": "ALIGNMENT_FAILED"}.items():
         row = results[name]
         assert row["outcome"] == "UNVERIFIABLE" and row["score"] is None
@@ -225,6 +236,9 @@ def test_excessive_translation_gives_alignment_failure(part, golden, profile):
     check_unavailable(evidence, "ALIGNMENT_FAILED")
     assert evidence.quality_gate["passed"] is True
     assert evidence.analysis["calibrated"] is True
+    alignment = evidence.analysis["alignment"]
+    assert alignment["failure"] == "LOW_FRAME_OVERLAP"
+    assert min(alignment["projected_probe_overlap"], alignment["reference_overlap"]) < alignment["thresholds"]["min_overlap"]
 
 
 def test_registered_difference_scores_visible_defect_and_emits_pngs(part, golden, profile):
@@ -244,6 +258,10 @@ def test_registered_difference_scores_visible_defect_and_emits_pngs(part, golden
     assert result.reason_codes == ["SCORE_ABOVE_REJECT"]
     assert result.analysis["score"] == result.raw_score
     assert result.analysis["calibrated"] is True
+    alignment = result.analysis["alignment"]
+    assert alignment["failure"] is None
+    assert alignment["usable_roi_pixels"] >= alignment["thresholds"]["min_usable_roi_pixels"]
+    assert alignment["correlation"] >= alignment["thresholds"]["min_correlation"]
     assert result.evidence_source == SOURCE
     region = result.analysis["regions"][0]
     assert region["x"] <= 475 < region["x"] + region["w"]

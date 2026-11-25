@@ -105,7 +105,30 @@
           "hold_threshold": 0.45,
           "reject_threshold": 0.7,
           "threshold_tightened": false,
-          "regions": []
+          "regions": [],
+          "alignment": {
+            "failure": null,
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 2000,
+            "inliers": 2000,
+            "inlier_ratio": 1.0,
+            "probe_inlier_coverage": 0.42608,
+            "reference_inlier_coverage": 0.42608,
+            "projected_probe_overlap": 1.0,
+            "reference_overlap": 1.0,
+            "roi_pixels": 1399040,
+            "usable_roi_pixels": 1384838,
+            "correlation": 1.0
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -287,7 +310,27 @@
           "hold_threshold": 0.45,
           "reject_threshold": 0.7,
           "threshold_tightened": false,
-          "regions": []
+          "regions": [],
+          "alignment": {
+            "failure": "LOW_FRAME_OVERLAP",
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 33,
+            "inliers": 28,
+            "inlier_ratio": 0.848485,
+            "probe_inlier_coverage": 0.196308,
+            "reference_inlier_coverage": 0.238014,
+            "projected_probe_overlap": 0.742617,
+            "reference_overlap": 0.894899
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -480,7 +523,30 @@
               "h": 64,
               "score": 0.0813099083268883
             }
-          ]
+          ],
+          "alignment": {
+            "failure": null,
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 167,
+            "inliers": 151,
+            "inlier_ratio": 0.904192,
+            "probe_inlier_coverage": 0.365842,
+            "reference_inlier_coverage": 0.373182,
+            "projected_probe_overlap": 0.88154,
+            "reference_overlap": 0.902071,
+            "roi_pixels": 1399040,
+            "usable_roi_pixels": 1247832,
+            "correlation": 0.981121
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -673,7 +739,30 @@
               "h": 6,
               "score": 0.07462389898368925
             }
-          ]
+          ],
+          "alignment": {
+            "failure": null,
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 87,
+            "inliers": 59,
+            "inlier_ratio": 0.678161,
+            "probe_inlier_coverage": 0.303445,
+            "reference_inlier_coverage": 0.281712,
+            "projected_probe_overlap": 0.999523,
+            "reference_overlap": 0.926793,
+            "roi_pixels": 1399040,
+            "usable_roi_pixels": 1282695,
+            "correlation": 0.983287
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -868,7 +957,30 @@
               "h": 69,
               "score": 0.08614483164100019
             }
-          ]
+          ],
+          "alignment": {
+            "failure": null,
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 136,
+            "inliers": 96,
+            "inlier_ratio": 0.705882,
+            "probe_inlier_coverage": 0.301902,
+            "reference_inlier_coverage": 0.300405,
+            "projected_probe_overlap": 0.934614,
+            "reference_overlap": 0.931731,
+            "roi_pixels": 1399040,
+            "usable_roi_pixels": 1289675,
+            "correlation": 0.900609
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1063,7 +1175,30 @@
               "h": 17,
               "score": 0.05473259194389047
             }
-          ]
+          ],
+          "alignment": {
+            "failure": null,
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 265,
+            "inliers": 232,
+            "inlier_ratio": 0.875472,
+            "probe_inlier_coverage": 0.460101,
+            "reference_inlier_coverage": 0.389317,
+            "projected_probe_overlap": 1.0,
+            "reference_overlap": 0.845981,
+            "roi_pixels": 1399040,
+            "usable_roi_pixels": 1170248,
+            "correlation": 0.982232
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1258,7 +1393,30 @@
               "h": 39,
               "score": 0.051108196354650845
             }
-          ]
+          ],
+          "alignment": {
+            "failure": null,
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 570,
+            "inliers": 523,
+            "inlier_ratio": 0.917544,
+            "probe_inlier_coverage": 0.432875,
+            "reference_inlier_coverage": 0.397578,
+            "projected_probe_overlap": 0.978704,
+            "reference_overlap": 0.900578,
+            "roi_pixels": 1399040,
+            "usable_roi_pixels": 1246319,
+            "correlation": 0.984033
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1368,7 +1526,23 @@
           "hold_threshold": 0.45,
           "reject_threshold": 0.7,
           "threshold_tightened": false,
-          "regions": []
+          "regions": [],
+          "alignment": {
+            "failure": "TOO_FEW_INLIERS",
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 25,
+            "inliers": 10,
+            "inlier_ratio": 0.4
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1422,7 +1596,21 @@
           "hold_threshold": 0.45,
           "reject_threshold": 0.7,
           "threshold_tightened": false,
-          "regions": []
+          "regions": [],
+          "alignment": {
+            "failure": "TOO_FEW_MATCHES",
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 10
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1476,7 +1664,21 @@
           "hold_threshold": 0.45,
           "reject_threshold": 0.7,
           "threshold_tightened": false,
-          "regions": []
+          "regions": [],
+          "alignment": {
+            "failure": "TOO_FEW_MATCHES",
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 13
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1530,7 +1732,23 @@
           "hold_threshold": 0.45,
           "reject_threshold": 0.7,
           "threshold_tightened": false,
-          "regions": []
+          "regions": [],
+          "alignment": {
+            "failure": "TOO_FEW_INLIERS",
+            "thresholds": {
+              "min_inliers": 24,
+              "min_inlier_ratio": 0.55,
+              "min_coverage": 0.12,
+              "min_overlap": 0.82,
+              "min_usable_roi_pixels": 256,
+              "min_correlation": 0.5
+            },
+            "probe_keypoints": 2000,
+            "reference_keypoints": 2000,
+            "matches": 34,
+            "inliers": 21,
+            "inlier_ratio": 0.617647
+          }
         },
         "quality_gate": {
           "passed": true,
@@ -1713,7 +1931,30 @@
               "hold_threshold": 0.45,
               "reject_threshold": 0.7,
               "threshold_tightened": false,
-              "regions": []
+              "regions": [],
+              "alignment": {
+                "failure": null,
+                "thresholds": {
+                  "min_inliers": 24,
+                  "min_inlier_ratio": 0.55,
+                  "min_coverage": 0.12,
+                  "min_overlap": 0.82,
+                  "min_usable_roi_pixels": 256,
+                  "min_correlation": 0.5
+                },
+                "probe_keypoints": 2000,
+                "reference_keypoints": 2000,
+                "matches": 2000,
+                "inliers": 2000,
+                "inlier_ratio": 1.0,
+                "probe_inlier_coverage": 0.42608,
+                "reference_inlier_coverage": 0.42608,
+                "projected_probe_overlap": 1.0,
+                "reference_overlap": 1.0,
+                "roi_pixels": 1399040,
+                "usable_roi_pixels": 1384838,
+                "correlation": 1.0
+              }
             },
             "quality_gate": {
               "passed": true,
@@ -2209,7 +2450,30 @@
               "hold_threshold": 0.45,
               "reject_threshold": 0.7,
               "threshold_tightened": false,
-              "regions": []
+              "regions": [],
+              "alignment": {
+                "failure": null,
+                "thresholds": {
+                  "min_inliers": 24,
+                  "min_inlier_ratio": 0.55,
+                  "min_coverage": 0.12,
+                  "min_overlap": 0.7,
+                  "min_usable_roi_pixels": 256,
+                  "min_correlation": 0.5
+                },
+                "probe_keypoints": 2000,
+                "reference_keypoints": 2000,
+                "matches": 2000,
+                "inliers": 2000,
+                "inlier_ratio": 1.0,
+                "probe_inlier_coverage": 0.42608,
+                "reference_inlier_coverage": 0.42608,
+                "projected_probe_overlap": 1.0,
+                "reference_overlap": 1.0,
+                "roi_pixels": 1399040,
+                "usable_roi_pixels": 1384838,
+                "correlation": 1.0
+              }
             },
             "quality_gate": {
               "passed": true,
