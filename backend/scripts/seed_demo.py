@@ -22,6 +22,7 @@ The story (one bracket part, two lines, three heats):
 Recall of H-7781 is left for the presenter to run live from Trace."""
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -30,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import text  # noqa: E402
 
-from app.core.config import settings  # noqa: E402
+from app.core.config import disposable_database_problem, settings  # noqa: E402
 from app.features.console_demo.synthetic import render, render_seal  # noqa: E402
 
 API = "/api/v1"
@@ -173,6 +174,9 @@ def _guard_local() -> None:
     host = urlparse(settings().database_url.replace("+psycopg", "")).hostname or ""
     if host not in LOCAL_HOSTS:
         sys.exit(f"refusing to reset non-local database host {host!r}")
+    # Under the Playwright suite only a throwaway `*_e2e` database may be wiped, whatever `.env` says.
+    if os.environ.get("AUTOQ_E2E") == "1" and (problem := disposable_database_problem(settings().database_url)):
+        sys.exit(f"refusing to reset during an e2e run: {problem}")
 
 
 def reset_database() -> None:
