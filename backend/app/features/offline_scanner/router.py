@@ -21,6 +21,7 @@ class EventIn(BaseModel):
     scanned_at: str
     local_decision: str
     local_reasons: list[dict] = Field(default_factory=list)
+    snapshot_id: str | None = Field(None, max_length=40)   # the snapshot this decision was made under (overrides the batch default)
 
 
 class SyncIn(BaseModel):
@@ -30,8 +31,10 @@ class SyncIn(BaseModel):
 
 
 @router.get("/offline/snapshot")
-def snapshot(shipment_id: str, device_id: str = Query(pattern=DEVICE), db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
-    return s.snapshot(db, p, shipment_id, device_id)
+def snapshot(shipment_id: str, device_id: str = Query(pattern=DEVICE), local_seq: int | None = Query(None, ge=0), pending: int | None = Query(None, ge=0),
+             db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
+    """`local_seq`/`pending` let a device with an empty queue check in while refreshing (see manifest close)."""
+    return s.snapshot(db, p, shipment_id, device_id, local_seq=local_seq, pending=pending)
 
 
 @router.post("/sync/scans")

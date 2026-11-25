@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import 'fake-indexeddb/auto'
-import { decideLocally, type QueuedScan, type SnapPayload } from './offline'
+import { decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload } from './offline'
 import { newKeyPair, signToken } from '../lib/token'
 import { chainHash, GENESIS, verifyChain } from '../lib/chain'
 import { appendScan, listQueue, updateScan } from './store'
@@ -43,5 +43,31 @@ describe('device hash chain', () => {
     await updateScan({ ...all[1], token: 't_evil' })
     expect(verifyChain(await listQueue())).toEqual({ ok: false, broken_at: 2 })
     expect(chainHash(GENESIS, all[2])).toBe(all[2].hash)
+  })
+})
+
+describe('sync provenance and reconciliation (A7 handoff)', () => {
+  const snaps = [
+    { payload: { id: 'snap_1', shipment: 'shp_1', iat: 1000, exp: 2000 } },
+    { payload: { id: 'snap_2', shipment: 'shp_2', iat: 1000, exp: 2000 } },
+  ]
+  const at = (sec: number) => new Date(sec * 1000).toISOString()
+
+  it('cites the snapshot recorded at capture, never the one currently on screen', () => {
+    expect(snapshotFor({ snapshot_id: 'snap_old', shipment_id: 'shp_1', scanned_at: at(1500), local_decision: 'PROVISIONAL_ACCEPT' }, snaps)).toBe('snap_old')
+  })
+  it('for older queue entries, picks the stored snapshot of the SAME shipment whose window covers the capture', () => {
+    expect(snapshotFor({ shipment_id: 'shp_2', scanned_at: at(1500), local_decision: 'PROVISIONAL_ACCEPT' }, snaps)).toBe('snap_2')
+    expect(snapshotFor({ shipment_id: 'shp_2', scanned_at: at(2500), local_decision: 'PROVISIONAL_ACCEPT' }, snaps)).toBeUndefined()
+    expect(snapshotFor({ shipment_id: 'shp_1', scanned_at: at(1500), local_decision: 'ONLINE' }, snaps)).toBeUndefined()
+  })
+  it('keeps a conflict visible even when it comes back as a replay after a lost response', () => {
+    expect(reconciledStatus({ local_decision: 'PROVISIONAL_ACCEPT', status: 'PENDING' }, { client_event_id: 'e', outcome: 'DUPLICATE', original_outcome: 'CONFLICT' })).toBe('CONFLICT')
+    expect(reconciledStatus({ local_decision: 'ONLINE', status: 'ACCEPTED' }, { client_event_id: 'e', outcome: 'CONFLICT' })).toBe('CONFLICT')
+  })
+  it('otherwise keeps an online decision and maps replays to their original outcome', () => {
+    expect(reconciledStatus({ local_decision: 'ONLINE', status: 'ACCEPTED' }, { client_event_id: 'e', outcome: 'DUPLICATE' })).toBe('ACCEPTED')
+    expect(reconciledStatus({ local_decision: 'PROVISIONAL_ACCEPT', status: 'PENDING' }, { client_event_id: 'e', outcome: 'DUPLICATE', original_outcome: 'ACCEPTED' })).toBe('ACCEPTED')
+    expect(reconciledStatus({ local_decision: 'LOCAL_BLOCK', status: 'PENDING' }, { client_event_id: 'e', outcome: 'BLOCKED' })).toBe('BLOCKED')
   })
 })

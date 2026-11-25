@@ -8,7 +8,7 @@ import { Brand } from '../layout/AppShell'
 import { Button, Honesty, Mono, Pill, Status, cx, ago, fmtTime } from '../components/ui'
 import { GateChecklist, Reasons } from '../components/domain'
 import { QrCamera } from '../scanner/QrCamera'
-import { decideLocally, type QueuedScan, type SnapPayload, type StoredSnapshot } from '../scanner/offline'
+import { decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload, type StoredSnapshot, type SyncResult } from '../scanner/offline'
 import { appendScan, deviceInfo, getPref, getSnapshot, listQueue, putSnapshot, setPref, updateScan } from '../scanner/store'
 import { decodeTokenUnsafe, verifyToken } from '../lib/token'
 import { verifyChain } from '../lib/chain'
@@ -91,8 +91,11 @@ export default function Scanner() {
     if (!shipId) return
     if (!quiet) { setBusy('snapshot'); setMsg(null) }
     try {
+      // Reporting the local queue lets the server count an empty-queue refresh as a check-in (manifest close waits for devices that haven't).
+      const [info, q] = await Promise.all([deviceInfo(), listQueue()])
+      const pendingNow = q.filter(x => !x.synced_at).length
       const [{ token }, { keys }, pk] = await Promise.all([
-        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent((dev ?? await deviceInfo()).device_id)}`),
+        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent(info.device_id)}&local_seq=${info.seq}&pending=${pendingNow}`),
         api.get<{ keys: { kid: string; public_key: string; status: string }[] }>('/keys'),
         api.get<{ items: Package[] }>('/packages'),
       ])
@@ -129,7 +132,7 @@ export default function Scanner() {
       } else {
         if (!snap) { setMsg({ tone: 'err', text: 'No offline snapshot for this shipment. Reconnect and prepare offline mode first.' }); return }
         const r = await decideLocally(token, snap.payload, await listQueue(), Date.now() / 1000)
-        const ev = await appendScan({ token, shipment_id: shipId, scanned_at: now, local_decision: r.decision, local_reasons: r.reasons, local_checks: r.checks, package_id: r.package_id, package_label: r.package_label, units: r.units, status: 'PENDING' })
+        const ev = await appendScan({ token, shipment_id: shipId, scanned_at: now, local_decision: r.decision, local_reasons: r.reasons, local_checks: r.checks, package_id: r.package_id, package_label: r.package_label, units: r.units, status: 'PENDING', snapshot_id: snap.payload.id })
         setShown({ kind: 'OFFLINE', decision: r.decision, label: r.package_label, reasons: r.reasons, checks: r.checks, at: now, event: ev.client_event_id })
         buzz(r.decision === 'PROVISIONAL_ACCEPT')
       }
@@ -151,18 +154,22 @@ export default function Scanner() {
     try {
       const unsynced = (await listQueue()).filter(q => !q.synced_at).sort((a, b) => a.seq - b.seq)
       if (!unsynced.length) { setMsg({ tone: 'ok', text: 'Nothing to sync' }); return }
-      const res = await api.post<{ results: { client_event_id: string; outcome: string; scan?: ScanDecision; note?: string }[]; chain: { ok: boolean; broken_at?: number } }>('/sync/scans', {
-        device_id: dev?.device_id, snapshot_id: snap?.payload.id,
-        events: unsynced.map(({ client_event_id, seq, prev_hash, hash, token, shipment_id, scanned_at, local_decision, local_reasons }) => ({ client_event_id, seq, prev_hash, hash, token, shipment_id, scanned_at, local_decision, local_reasons })),
+      const stored = (await Promise.all([...new Set(unsynced.map(e => e.shipment_id))].map(getSnapshot))).filter((x): x is StoredSnapshot => !!x)
+      const res = await api.post<{ results: (SyncResult & { scan?: ScanDecision })[]; chain: { ok: boolean; broken_at?: number } }>('/sync/scans', {
+        device_id: dev?.device_id,
+        events: unsynced.map(e => ({ client_event_id: e.client_event_id, seq: e.seq, prev_hash: e.prev_hash, hash: e.hash, token: e.token, shipment_id: e.shipment_id,
+          scanned_at: e.scanned_at, local_decision: e.local_decision, local_reasons: e.local_reasons, snapshot_id: snapshotFor(e, stored) })),
       })
       if (!res.chain.ok) { setMsg({ tone: 'err', text: `Server rejected the batch: device chain broken at seq ${res.chain.broken_at}. Escalate — events were altered after capture.` }); return }
       const at = new Date().toISOString()
       for (const r of res.results) {
         const ev = unsynced.find(e => e.client_event_id === r.client_event_id); if (!ev) continue
-        const status = ev.local_decision === 'ONLINE' && ev.status !== 'PENDING' ? ev.status : (r.outcome as QueuedScan['status'])
+        const status = reconciledStatus(ev, r)
         await updateScan({ ...ev, status, synced_at: at, note: r.note || ev.note, server_reasons: r.scan?.reasons ?? ev.server_reasons, server_checks: r.scan?.checks ?? ev.server_checks, package_label: r.scan?.package_label ?? ev.package_label })
       }
-      const c = res.results.filter(r => r.outcome === 'CONFLICT').length
+      // The offline card on the Scan tab was the device's guess; once the server has decided that event, the Queue holds the truth.
+      setShown(cur => (cur && res.results.some(r => r.client_event_id === cur.event) ? null : cur))
+      const c = res.results.filter(r => r.outcome === 'CONFLICT' || r.original_outcome === 'CONFLICT').length
       setMsg({ tone: c ? 'err' : 'ok', text: `Synced ${res.results.length} event(s)${c ? ` · ${c} conflict(s) need physical action` : ''}` })
       if (c) setTab('queue')
       loadShips(); await prepareOffline(true)

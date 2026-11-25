@@ -43,15 +43,23 @@ All images and the profile calibration are **SYNTHETIC_TEST**, and the UI badges
 **End-to-end tests (Playwright):**
 ```bash
 cd e2e && npm ci && npx playwright install chromium   # once
-make db && make migrate                               # live specs need PostgreSQL
-make e2e                                              # reseeds, starts API :8010 + UIs :5180 (live) / :5181 (mock)
+make db                                               # PostgreSQL must be running
+make e2e                                              # disposable DB + API :8019 + UIs :5180 (live) / :5181 (mock)
 ```
-The `live` project reseeds the **local** database and then plays the demo in order:
+The suite never touches your dev, demo or verification databases:
+- It creates, migrates and seeds its own `autoq_e2e` database from scratch on every run.
+- It starts its own API on a dedicated port and never attaches to a server that is already running.
+- With `AUTOQ_E2E=1`, the API refuses to boot, and the demo reset refuses to run, unless the database is local and named `*_e2e`.
+
+Use `AUTOQ_E2E_DB=<name>_e2e` to choose another disposable database and `AUTOQ_E2E_API_PORT` to change the API port.
+
+The `live` project plays the demo in order:
 - sign-in and role gates;
 - inspection PASS / REJECT / HOLD, plus no passport under 4M containment;
-- dispatch blocks for a stale seal, a torn seal, a forged label and a duplicate, then a replay, a recheck and an accept;
-- recall preview and execute, tasks, release;
-- an 8D approved with an uploaded review record, and the PDF downloaded;
-- audit chain verification.
+- dispatch blocks, replay, recheck and accept;
+- recall, tasks and release;
+- 8D approval and PDF;
+- live alerts across two browsers;
+- audit verification.
 
-The `mock` project is a backend-free smoke test. Running servers on those ports are reused. `npm run test:mock` needs no database, and `npm run report` opens the last HTML report.
+The `mock` project is a backend-free smoke test (`make e2e-mock`). `npm run report` opens the last HTML report.

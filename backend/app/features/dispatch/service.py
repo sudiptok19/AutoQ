@@ -40,6 +40,11 @@ def _sha(obj) -> str:
     return hashlib.sha256(canonicalize(obj).encode()).hexdigest()
 
 
+def content_sha(shipment_id: str, token: str) -> str:
+    """Fingerprint of what a scan claims: which label, onto which shipment. Idempotency and provenance compare this."""
+    return _sha({"shipment": shipment_id, "token": token})
+
+
 # ── quantities ─────────────────────────────────────────────────────────────
 def loaded_units(db: Session, shipment_id: str) -> int:
     return db.scalar(select(func.coalesce(func.sum(m.Load.unit_count), 0)).where(m.Load.shipment_id == shipment_id, m.Load.removed_at.is_(None)))
@@ -78,7 +83,7 @@ def shipment_view(db: Session, s: m.Shipment, *, scans: bool = True) -> dict:
            "movements": [{"type": mv.type, "location": mv.location, "occurred_at": _iso(mv.occurred_at), "recorded_at": _iso(mv.recorded_at)} for mv in moves],
            "closed_at": _iso(s.closed_at), "created_at": _iso(s.created_at)}
     from app.features.offline_scanner.service import pending_for_shipment
-    out["offline_devices_not_synced"] = pending_for_shipment(db, s.id)  # informational (best effort)
+    out["offline_devices_not_synced"] = pending_for_shipment(db, s.id)  # close refuses while this is non-empty
     if scans:
         out["scans"] = [scan_view(db, x) for x in db.scalars(select(m.Scan).where(m.Scan.shipment_id == s.id).order_by(m.Scan.decided_at.desc()).limit(200))]
     return out
@@ -222,7 +227,7 @@ def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_
          captured_at: datetime | None = None, commit_load: bool = True) -> tuple[dict, bool]:
     """Returns (scan view, created). Idempotent on client_event_id."""
     s0 = find_shipment(db, shipment_key)
-    content = _sha({"shipment": s0.id, "token": token})
+    content = content_sha(s0.id, token)
     prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == client_event_id)).first()
     if prior:
         if prior.content_sha256 != content:
@@ -307,6 +312,11 @@ def close(db: Session, p: Principal, shipment_key: str, unsynced: int = 0) -> di
         blockers.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
     if unsynced:
         blockers.append({"code": "PROVISIONAL_PENDING", "message": f"{unsynced} offline scan(s) on this device are not synced yet"})
+    from app.features.offline_scanner.service import pending_for_shipment
+    for d in pending_for_shipment(db, s.id):
+        blockers.append({"code": "DEVICE_SYNC_PENDING", "device_id": d["device_id"], "snapshot_id": d["snapshot_id"],
+                         "message": f"Device {d['device_id']} ({d['operator']}) holds an offline snapshot issued {d['issued_at']} and has not synced since — "
+                                    f"sync it, or wait for the snapshot to expire at {d['expires_at']}"})
     for prob in _revalidate(db, pkgs, s):
         blockers.append({"code": "LOADED_PACKAGE_BLOCKED", "message": f"{prob['label']}: {', '.join(b['code'] for b in prob['blockers'])} — unload required", "package_id": prob["package_id"]})
     if blockers:
