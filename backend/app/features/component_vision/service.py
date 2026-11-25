@@ -292,46 +292,77 @@ def _correlation(first: Image, second: Image, mask: NDArray[np.bool_]) -> float:
     return float(np.dot(a, b)) / energy if energy > 0 else 0.0
 
 
-def _align(probe: Image, reference: Image, limits: _Registration) -> tuple[Image, NDArray[np.bool_]] | None:
+def _align(
+    probe: Image, reference: Image, limits: _Registration, diagnostics: dict,
+) -> tuple[Image, NDArray[np.bool_]] | None:
+    """Record the first failed check and measurements reached before it."""
     probe_gray = cv2.cvtColor(probe, cv2.COLOR_BGR2GRAY)
     reference_gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
     key_probe, desc_probe = _features(probe_gray)
     key_reference, desc_reference = _features(reference_gray)
+    diagnostics.update(probe_keypoints=len(key_probe), reference_keypoints=len(key_reference))
     if desc_probe is None or desc_reference is None:
+        diagnostics["failure"] = "NO_DESCRIPTORS"
         return None
     pairs = _matches(desc_probe, desc_reference)
+    diagnostics["matches"] = len(pairs)
     if len(pairs) < limits.min_inliers:
+        diagnostics["failure"] = "TOO_FEW_MATCHES"
         return None
     src = np.array([key_probe[i].pt for i, _ in pairs], dtype=np.float32)
     dst = np.array([key_reference[j].pt for _, j in pairs], dtype=np.float32)
     # RANSAC uses a fixed sample sequence for the same ordered correspondence arrays.
     model, mask = cv2.findHomography(src, dst, cv2.RANSAC, 3.0, maxIters=2000, confidence=0.995)
     if model is None or mask is None:
+        diagnostics["failure"] = "HOMOGRAPHY_FAILED"
         return None
     inliers = mask.ravel() != 0
     count = int(inliers.sum())
-    if count < limits.min_inliers or count / len(pairs) < limits.min_inlier_ratio:
+    inlier_ratio = count / len(pairs)
+    diagnostics.update(inliers=count, inlier_ratio=round(inlier_ratio, 6))
+    if count < limits.min_inliers:
+        diagnostics["failure"] = "TOO_FEW_INLIERS"
         return None
-    if min(_coverage(src[inliers], probe_gray.shape), _coverage(dst[inliers], reference_gray.shape)) < limits.min_coverage:
+    if inlier_ratio < limits.min_inlier_ratio:
+        diagnostics["failure"] = "LOW_INLIER_RATIO"
+        return None
+    probe_coverage = _coverage(src[inliers], probe_gray.shape)
+    reference_coverage = _coverage(dst[inliers], reference_gray.shape)
+    diagnostics.update(probe_inlier_coverage=round(probe_coverage, 6),
+                       reference_inlier_coverage=round(reference_coverage, 6))
+    if min(probe_coverage, reference_coverage) < limits.min_coverage:
+        diagnostics["failure"] = "LOW_INLIER_COVERAGE"
         return None
     projected_area = _projected_area(model, probe_gray.shape)
     if projected_area is None:
+        diagnostics["failure"] = "INVALID_PROJECTED_FRAME"
         return None
     height, width = reference_gray.shape
     full_mask = cv2.warpPerspective(np.full(probe_gray.shape, 255, np.uint8), model, (width, height), flags=cv2.INTER_NEAREST)
     # Measure overlap in the warped footprint. Polygon intersections can be unstable at coincident edges.
-    if cv2.countNonZero(full_mask) < limits.min_overlap * max(projected_area, height * width):
+    shared_pixels = cv2.countNonZero(full_mask)
+    reference_area = height * width
+    diagnostics.update(projected_probe_overlap=round(min(1.0, shared_pixels / projected_area), 6),
+                       reference_overlap=round(shared_pixels / reference_area, 6))
+    if shared_pixels < limits.min_overlap * max(projected_area, reference_area):
+        diagnostics["failure"] = "LOW_FRAME_OVERLAP"
         return None
     # Erode the warped footprint so interpolation and filtering do not score invalid borders.
     footprint = cv2.erode(full_mask, np.ones((7, 7), np.uint8), borderType=cv2.BORDER_CONSTANT, borderValue=0) != 0
     crop = _roi_pixels(reference_gray.shape, limits.roi)
     usable = footprint[crop]
-    if usable.size < 256 or int(usable.sum()) < max(256, limits.min_overlap * usable.size):
+    usable_pixels = int(usable.sum())
+    diagnostics.update(roi_pixels=usable.size, usable_roi_pixels=usable_pixels)
+    if usable.size < 256 or usable_pixels < max(256, limits.min_overlap * usable.size):
+        diagnostics["failure"] = "LOW_ROI_SUPPORT"
         return None
     # Global gray correlation rejects a numerically valid but visually unrelated registration.
     aligned = cv2.warpPerspective(probe, model, (width, height), flags=cv2.INTER_LINEAR)
     aligned_gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
-    if _correlation(reference_gray[crop], aligned_gray[crop], usable) < 0.50:
+    correlation = _correlation(reference_gray[crop], aligned_gray[crop], usable)
+    diagnostics["correlation"] = round(correlation, 6)
+    if correlation < 0.50:
+        diagnostics["failure"] = "LOW_CORRELATION"
         return None
     valid = np.zeros(reference_gray.shape, dtype=bool)
     valid[crop] = usable
@@ -428,9 +459,19 @@ def evaluate(
         return unavailable(["MODEL_UNCALIBRATED"], has_calibration=False)
     limits = _registration(config)
     golden = _working(golden)
+    diagnostics = {
+        "failure": None,
+        "thresholds": {
+            "min_inliers": limits.min_inliers, "min_inlier_ratio": limits.min_inlier_ratio,
+            "min_coverage": limits.min_coverage, "min_overlap": limits.min_overlap,
+            "min_usable_roi_pixels": 256, "min_correlation": 0.50,
+        },
+    }
+    analysis["alignment"] = diagnostics
     try:
-        registration = _align(_working(capture), golden, limits)
+        registration = _align(_working(capture), golden, limits, diagnostics)
     except cv2.error:
+        diagnostics["failure"] = "OPENCV_ERROR"
         registration = None
     if registration is None:
         return unavailable(["ALIGNMENT_FAILED"])
