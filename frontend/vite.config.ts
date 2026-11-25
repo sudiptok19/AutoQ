@@ -29,7 +29,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
         runtimeCaching: [{ urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/, handler: 'CacheFirst', options: { cacheName: 'fonts', expiration: { maxEntries: 20 } } }],
       },
       devOptions: { enabled: false },
@@ -37,7 +37,14 @@ export default defineConfig({
   ],
   server: {
     host: true,
-    proxy: { '/api': { target: `http://localhost:${process.env.AUTOQ_API_PORT ?? '8010'}`, changeOrigin: true } },
+    proxy: {
+      '/api': { target: `http://localhost:${process.env.AUTOQ_API_PORT ?? '8010'}`, changeOrigin: true },
+      '/ws': {
+        target: `ws://localhost:${process.env.AUTOQ_API_PORT ?? '8010'}`, ws: true, changeOrigin: true,
+        // A browser closing its event socket (navigation, sign-out) resets the upstream; that is not an error.
+        configure: (proxy: any) => proxy.on('error', (e: NodeJS.ErrnoException) => { if (e.code !== 'ECONNRESET') console.error('[ws proxy]', e) }),
+      },
+    },
   },
   test: { environment: 'node' },
 } as any)
