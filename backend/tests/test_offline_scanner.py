@@ -103,8 +103,8 @@ def test_two_devices_stage_the_same_package(client, auth, db):
 def test_local_block_and_lost_online_are_never_loaded(client, auth, db):
     _, _, _, a, b, shp = setup(client, auth, db)
     sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
-    from tests.test_dispatch import scan
-    online = scan(client, auth, shp["id"], a["token"], "dev-a1:000001").json()       # online decision reached the server
+    online = client.post(f"{API}/shipments/{shp['id']}/scans", json={"token": a["token"], "client_event_id": "dev-a1:000001", "device_id": "dev-a1"},
+                         headers=auth("disp.kiran")).json()                          # online decision reached the server (from this phone)
     evs = events("dev-a1", [(a["token"], shp["id"], "ONLINE"), (b["token"], shp["id"], "ONLINE"), (b["token"], shp["id"], "LOCAL_BLOCK")])
     r = sync(client, auth, "dev-a1", sid, evs).json()["results"]
     assert [x["outcome"] for x in r] == ["DUPLICATE", "BLOCKED", "BLOCKED"] and r[0]["scan"]["scan_id"] == online["scan_id"]
@@ -120,5 +120,91 @@ def test_device_bound_to_operator_and_close_blocks_unsynced(client, auth, db):
     from tests.test_dispatch import scan
     scan(client, auth, shp["id"], a["token"], "c1"); scan(client, auth, shp["id"], b["token"], "c2")
     r = client.post(f"{API}/shipments/{shp['id']}/close", json={"unsynced_offline_events": 2}, headers=auth("disp.kiran"))
-    assert r.status_code == 409 and r.json()["error"]["details"]["blockers"][0]["code"] == "PROVISIONAL_PENDING"
+    codes = [b["code"] for b in r.json()["error"]["details"]["blockers"]]
+    assert r.status_code == 409 and codes == ["PROVISIONAL_PENDING", "DEVICE_SYNC_PENDING"]   # dev-a1 holds a snapshot, never synced
+    assert sync(client, auth, "dev-a1", None, []).json()["chain"]["ok"] is True                 # an empty sync is a check-in
+    assert client.post(f"{API}/shipments/{shp['id']}/close", headers=auth("disp.kiran")).json()["status"] == "CLOSED"
+
+
+# ── provenance, lost responses and close enforcement (A7 handoff) ──────────────────────────────────────────────
+def _count(db, model, *where):
+    return db.scalar(select(func.count()).select_from(model).where(*where))
+
+
+def test_provisional_load_without_a_snapshot_is_a_conflict_not_a_load(client, auth, db):
+    _, _, _, a, _, shp = setup(client, auth, db)
+    snap(client, auth, shp["id"])                                       # registers the device; the event names no snapshot
+    r = sync(client, auth, "dev-a1", None, events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and "SNAPSHOT_REQUIRED" in r["note"] and r["segregation_task_id"]
+    assert _count(db, m.Load) == 0
+
+
+def test_snapshot_must_belong_to_this_device_operator_and_shipment(client, auth, db):
+    _, _, _, a, b, shp = setup(client, auth, db)
+    mine = snap(client, auth, shp["id"], "dev-a1").json()["snapshot_id"]
+    theirs = snap(client, auth, shp["id"], "dev-b2").json()["snapshot_id"]
+    evs = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT"), (b["token"], shp["id"], "PROVISIONAL_ACCEPT")])
+    evs[0]["snapshot_id"] = theirs                                      # per-event claim overrides the batch default
+    r = sync(client, auth, "dev-a1", mine, evs).json()["results"]
+    assert [x["outcome"] for x in r] == ["CONFLICT", "ACCEPTED"] and "SNAPSHOT_SCOPE_MISMATCH" in r[0]["note"]
+    stored = db.get(m.DeviceEvent, ("dev-a1", 1))
+    assert stored.snapshot_id is None and db.get(m.DeviceEvent, ("dev-a1", 2)).snapshot_id == mine
+
+
+def test_capture_outside_the_snapshot_window_is_refused(client, auth, db):
+    _, _, _, a, b, shp = setup(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    evs = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])
+    evs[0]["scanned_at"] = "2020-01-01T00:00:00Z"; evs[0]["hash"] = chain_hash(GEN, evs[0])      # before the snapshot existed
+    r = sync(client, auth, "dev-a1", sid, evs).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and "CAPTURE_BEFORE_SNAPSHOT" in r["note"]
+    nxt = events("dev-a1", [(b["token"], shp["id"], "PROVISIONAL_ACCEPT")], start_seq=2, head=evs[0]["hash"])
+    nxt[0]["scanned_at"] = "2099-01-01T00:00:00Z"; nxt[0]["hash"] = chain_hash(evs[0]["hash"], nxt[0])
+    r = sync(client, auth, "dev-a1", sid, nxt).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and "CAPTURE_TIME_INVALID" in r["note"]
+    assert _count(db, m.Load) == 0
+
+
+def test_online_event_is_linked_only_to_the_scan_it_produced(client, auth, db):
+    _, _, _, a, b, shp = setup(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    from tests.test_dispatch import scan
+    other = scan(client, auth, shp["id"], a["token"], "dev-a1:000001").json()   # same id, but recorded from another device
+    r = sync(client, auth, "dev-a1", sid, events("dev-a1", [(b["token"], shp["id"], "ONLINE")])).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and r["scan"] is None and "not linked" in r["note"]
+    assert db.get(m.DeviceEvent, ("dev-a1", 1)).scan_id is None
+    assert db.scalars(select(m.Alert).where(m.Alert.type == "OFFLINE_CONFLICT")).first().reason_codes == ["EVENT_PROVENANCE_MISMATCH"]
+    assert _count(db, m.Load) == 1 and db.get(m.Scan, other["scan_id"]).decision == "ACCEPTED"   # the real scan is untouched
+
+
+def test_lost_sync_response_still_returns_the_unload_instruction(client, auth, db):
+    _, _, _, a, _, shp = setup(client, auth, db)
+    s1 = snap(client, auth, shp["id"], "dev-a1").json()["snapshot_id"]
+    s2 = snap(client, auth, shp["id"], "dev-b2").json()["snapshot_id"]
+    sync(client, auth, "dev-a1", s1, events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")]))
+    evs = events("dev-b2", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])
+    first = sync(client, auth, "dev-b2", s2, evs).json()["results"][0]      # imagine this response never reached the phone
+    again = sync(client, auth, "dev-b2", s2, evs).json()["results"][0]
+    assert first["outcome"] == "CONFLICT" and again["outcome"] == "DUPLICATE" and again["original_outcome"] == "CONFLICT"
+    assert again["note"] == first["note"] and "unload and segregate" in again["note"]
+    assert again["segregation_task_id"] == first["segregation_task_id"] and again["segregation_task_status"] == "OPEN"
+
+
+def test_close_waits_for_devices_holding_a_live_snapshot(client, auth, db):
+    _, _, _, a, b, shp = setup(client, auth, db)
+    from tests.test_dispatch import scan
+    scan(client, auth, shp["id"], a["token"], "c1"); scan(client, auth, shp["id"], b["token"], "c2")
+    sid = snap(client, auth, shp["id"], "dev-a1").json()["snapshot_id"]
+    view = client.get(f"{API}/shipments/{shp['id']}", headers=auth("disp.kiran")).json()
+    assert [d["snapshot_id"] for d in view["offline_devices_not_synced"]] == [sid]
+    blocked = client.post(f"{API}/shipments/{shp['id']}/close", headers=auth("disp.kiran"))
+    assert blocked.status_code == 409 and blocked.json()["error"]["details"]["blockers"][0]["code"] == "DEVICE_SYNC_PENDING"
+    # The scanner's automatic refresh reports an empty queue at the server head: that is a check-in, not a pending device.
+    snap_params = {"shipment_id": shp["id"], "device_id": "dev-a1", "local_seq": 0, "pending": 0}
+    assert client.get(f"{API}/offline/snapshot", params=snap_params, headers=auth("disp.kiran")).status_code == 200
+    assert client.get(f"{API}/shipments/{shp['id']}", headers=auth("disp.kiran")).json()["offline_devices_not_synced"] == []
+    # A refresh that admits pending events (or a stale head) is not.
+    client.get(f"{API}/offline/snapshot", params=snap_params | {"pending": 1}, headers=auth("disp.kiran"))
+    assert len(client.get(f"{API}/shipments/{shp['id']}", headers=auth("disp.kiran")).json()["offline_devices_not_synced"]) == 1
+    sync(client, auth, "dev-a1", None, [])
     assert client.post(f"{API}/shipments/{shp['id']}/close", headers=auth("disp.kiran")).json()["status"] == "CLOSED"

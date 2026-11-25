@@ -14,6 +14,30 @@ export interface QueuedScan {
   local_decision: LocalDecision; local_reasons: Reason[]; local_checks: GateCheck[]
   package_id: string | null; package_label: string | null; units: number
   status: QueueStatus; server_reasons?: Reason[]; server_checks?: GateCheck[]; note?: string; synced_at?: string
+  /** The signed snapshot this offline decision was made under. Sent per event: a batch can span shipments and refreshes. */
+  snapshot_id?: string
+}
+
+/** What the server said about one event on sync. A DUPLICATE carries the ORIGINAL outcome (e.g. after a lost response). */
+export interface SyncResult { client_event_id: string; outcome: string; original_outcome?: string; note?: string; segregation_task_id?: string | null }
+
+/** The snapshot to cite for an event: the one recorded at capture, else (events queued before this field existed)
+ *  the stored snapshot for its shipment whose validity window contains the capture time. */
+export function snapshotFor(ev: Pick<QueuedScan, 'snapshot_id' | 'shipment_id' | 'scanned_at' | 'local_decision'>,
+                            stored: { payload: Pick<SnapPayload, 'id' | 'shipment' | 'iat' | 'exp'> }[]): string | undefined {
+  if (ev.snapshot_id) return ev.snapshot_id
+  if (ev.local_decision === 'ONLINE') return undefined
+  const t = Date.parse(ev.scanned_at) / 1000
+  return stored.find(s => s.payload.shipment === ev.shipment_id && s.payload.iat <= t && t < s.payload.exp)?.payload.id
+}
+
+/** Queue status after sync. A conflict — first time or replayed after a lost response — always wins, because it carries
+ *  a physical instruction. An online scan otherwise keeps the decision it already received. */
+export function reconciledStatus(ev: Pick<QueuedScan, 'local_decision' | 'status'>, r: SyncResult): QueueStatus {
+  if (r.outcome === 'CONFLICT' || (r.outcome === 'DUPLICATE' && r.original_outcome === 'CONFLICT')) return 'CONFLICT'
+  if (ev.local_decision === 'ONLINE' && ev.status !== 'PENDING') return ev.status
+  if (r.outcome === 'DUPLICATE' && r.original_outcome && ['ACCEPTED', 'BLOCKED'].includes(r.original_outcome)) return r.original_outcome as QueueStatus
+  return r.outcome as QueueStatus
 }
 export interface LocalResult { decision: LocalDecision; reasons: Reason[]; checks: GateCheck[]; package_id: string | null; package_label: string | null; units: number }
 

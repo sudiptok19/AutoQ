@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,3 +28,18 @@ class Settings(BaseSettings):
 @lru_cache
 def settings() -> Settings:
     return Settings()
+
+
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "db", "postgres"}
+
+
+def disposable_database_problem(url: str) -> str | None:
+    """Why `url` is NOT safe to wipe for an automated end-to-end run, or None. Only a local database whose name
+    ends in `_e2e` qualifies; dev, demo and physical-verification databases never do."""
+    u = urlparse(url.replace("+psycopg", ""))
+    name = u.path.lstrip("/")
+    if (u.hostname or "") not in LOCAL_HOSTS:
+        return f"host {u.hostname!r} is not local"
+    if not name.endswith("_e2e") or not name.replace("_", "").isalnum():
+        return f"database {name!r} is not a disposable e2e database (its name must end in _e2e)"
+    return None
