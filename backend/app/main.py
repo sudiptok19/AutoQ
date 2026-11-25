@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core import errors
-from app.core.config import settings
+from app.core.config import disposable_database_problem, settings
 from app.features.auth_evidence.router import router as auth_evidence
 from app.adapters.ports_impl import PgPorts
 from app.features.alerts import relay
@@ -35,6 +35,9 @@ API = "/api/v1"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # An API started by the e2e suite gets wiped and replayed: refuse to boot against anything but a disposable database.
+    if os.environ.get("AUTOQ_E2E") == "1" and (problem := disposable_database_problem(settings().database_url)):
+        raise RuntimeError(f"AUTOQ_E2E=1 but the database is not disposable: {problem}")
     task = None if os.environ.get("AUTOQ_DISABLE_RELAY") == "1" else asyncio.create_task(relay.run_forever())
     yield
     if task:

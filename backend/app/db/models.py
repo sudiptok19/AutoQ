@@ -491,6 +491,8 @@ class Device(Base):
     last_seq: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     head_hash: Mapped[str] = mapped_column(String(64), server_default=text("repeat('0', 64)"))
     registered_at: Mapped[datetime] = mapped_column(Ts, server_default=now)
+    # Last moment the server knew this device had nothing unsynced: a sync, or a snapshot download reporting an empty queue.
+    checked_in_at: Mapped[datetime | None] = mapped_column(Ts)
 
 
 class OfflineSnapshot(Base):
