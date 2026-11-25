@@ -95,7 +95,7 @@ export default function Dispatch() {
     const sc = p.last_seal_check
     const fresh = sc?.kind === 'RECHECK' && Date.now() - new Date(sc.created_at).getTime() < 60 * 60_000
     return (
-      <div key={p.id} className={cx('rounded-xl border bg-surface p-3', p.held ? 'border-reject/40' : 'border-line')}>
+      <div key={p.id} data-testid={`crate-${p.label}`} className={cx('rounded-xl border bg-surface p-3', p.held ? 'border-reject/40' : 'border-line')}>
         <div className="flex items-center gap-2">
           <Mono className="text-[13px] font-semibold">{p.label}</Mono>
           {p.held ? <Status value="HELD" /> : p.state === 'SEAL_REVIEW' ? <Status value="SEAL_REVIEW" /> : null}

@@ -40,6 +40,8 @@ export interface Inspection {
   evidence: { image_sha256: string; image_url: string; heatmap_url?: string | null; aligned_url?: string | null }
   quality_gate: QualityGate; analysis: Analysis; verdict: Verdict; reasons: Reason[]
   passport: Passport | null; synthetic: boolean; review?: { action: string; reason: string; by: string; at: string } | null
+  /** Why a PASS did not (yet) yield a passport, e.g. CONTAINMENT_ACTIVE. Live backend only. */
+  issuance_blockers?: Reason[]; contained?: boolean
 }
 
 export type FourMCategory = 'MAN' | 'MACHINE' | 'MATERIAL' | 'METHOD'
