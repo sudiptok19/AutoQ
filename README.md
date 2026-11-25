@@ -39,3 +39,19 @@ Sign in with any dev account (password `autoq-dev`). The seed leaves:
 All images and the profile calibration are **SYNTHETIC_TEST**, and the UI badges them. Seal rechecks expire after 60 min, so reseed shortly before presenting.
 
 **Mock mode (no backend):** `make frontend` runs everything in the browser against an in-memory mock API.
+
+**End-to-end tests (Playwright):**
+```bash
+cd e2e && npm ci && npx playwright install chromium   # once
+make db && make migrate                               # live specs need PostgreSQL
+make e2e                                              # reseeds, starts API :8010 + UIs :5180 (live) / :5181 (mock)
+```
+The `live` project reseeds the **local** database and then plays the demo in order:
+- sign-in and role gates;
+- inspection PASS / REJECT / HOLD, plus no passport under 4M containment;
+- dispatch blocks for a stale seal, a torn seal, a forged label and a duplicate, then a replay, a recheck and an accept;
+- recall preview and execute, tasks, release;
+- an 8D approved with an uploaded review record, and the PDF downloaded;
+- audit chain verification.
+
+The `mock` project is a backend-free smoke test. Running servers on those ports are reused. `npm run test:mock` needs no database, and `npm run report` opens the last HTML report.
