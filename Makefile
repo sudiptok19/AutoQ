@@ -1,4 +1,4 @@
-.PHONY: db migrate keys seed-users seed-demo backend backend-test contracts frontend frontend-test e2e
+.PHONY: db migrate keys seed-users seed-demo backend backend-test contracts frontend frontend-test e2e e2e-mock
 
 API_PORT ?= 8010
 
@@ -12,4 +12,5 @@ contracts:     ; cd backend && uv run python scripts/export_contracts.py
 frontend:      ; cd frontend && npm run dev
 frontend-test: ; cd frontend && npm test
 e2e:           ; cd e2e && npx playwright test
+e2e-mock:      ; cd e2e && npx playwright test --project=mock
 seed-demo:     ; cd backend && uv run python scripts/seed_demo.py --reset
