@@ -16,5 +16,5 @@ def raise_alert(db: Session, *, type: str, severity: str, entity_type: str, enti
                      .on_conflict_do_nothing(index_elements=["dedupe_key"]).returning(m.Alert.id))
     if res.scalar_one_or_none() is None:
         return None
-    outbox.emit(db, event_type, entity_type, entity_id, severity=severity, audible_siren=audible, reason_codes=reason_codes, payload={"alert_id": aid, **details})
+    outbox.emit(db, event_type, entity_type, entity_id, severity=severity, audible_siren=audible, reason_codes=reason_codes, payload={"alert_id": aid, "alert_type": type, **details})
     return aid
