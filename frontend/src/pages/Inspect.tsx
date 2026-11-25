@@ -17,10 +17,16 @@ function VerdictPanel({ insp, unit }: { insp: Inspection; unit?: Unit }) {
         <div className="num text-[34px] font-semibold leading-none tracking-tight" style={{ color: toneVar[t] }}>{insp.verdict}</div>
         <div className="min-w-0 flex-1 text-[12.5px]">
           <div className="font-medium">{unit?.serial}</div>
-          <div className="text-muted">{insp.verdict === 'PASS' ? 'Passport issued and signed.' : insp.verdict === 'HOLD' ? 'Needs quality-engineer review. No release.' : 'Rejected. No shipment identity.'}</div>
+          <div className="text-muted">{verdictLine(insp)}</div>
         </div>
         <div className="flex flex-col items-end gap-1">{insp.synthetic && <Honesty kind="synthetic" />}{!a.calibrated && <Honesty kind="uncalibrated" />}</div>
       </div>
+      {insp.verdict === 'PASS' && !insp.passport && !!insp.issuance_blockers?.length && (
+        <div className="rounded-lg border border-hold/40 bg-hold/10 p-3">
+          <div className="eyebrow mb-1.5">Why no passport</div>
+          <Reasons reasons={insp.issuance_blockers} />
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2">
         <EvidenceImage url={insp.evidence.image_url} heatmap={insp.evidence.heatmap_url} regions={a.regions} />
         <div className="space-y-3">
@@ -49,6 +55,15 @@ function VerdictPanel({ insp, unit }: { insp: Inspection; unit?: Unit }) {
       )}
     </div>
   )
+}
+
+/** The one-line consequence of a verdict. A PASS only says "issued" when a passport actually came back ACTIVE. */
+function verdictLine(insp: Inspection): string {
+  if (insp.verdict === 'HOLD') return 'Needs quality-engineer review. No release.'
+  if (insp.verdict === 'REJECT') return 'Rejected. No shipment identity.'
+  if (insp.passport?.status === 'ACTIVE') return 'Passport issued and signed.'
+  if (insp.passport) return `Passed. Passport ${insp.passport.status.toLowerCase()}, not dispatch-eligible.`
+  return 'Passed, but no passport issued yet.'
 }
 
 /** Scores are model outputs in [0,1]; four decimals is the meaningful precision for display. */
