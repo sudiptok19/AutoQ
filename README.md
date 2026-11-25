@@ -30,7 +30,7 @@ make seed-demo    # wipes the LOCAL db and plays the demo story through the API 
 make backend      # API on :8010 (docs at /docs)
 cd frontend && VITE_API_MODE=live npm run dev   # UI proxies /api to :8010
 ```
-Sign in with any dev account (password `autoq-dev`). The seed leaves:
+Sign in with any dev account (password `autoq-dev`). The header shows **LIVE** while the event socket is connected. Alerts pop up on every open control-room screen, with a siren you can mute. The seed leaves:
 - **Dock demo:** shipment `SHP-0004` open at Dock 3. `PKG-0004` scans ACCEPTED; `PKG-0005` is blocked until a dispatcher rechecks its seal; `PKG-0006` has a torn seal and is in SEAL_REVIEW.
 - **Recall:** heat `H-7781` is ready to recall from Trace.
 - **Containment:** an active 4M containment on Line 3.

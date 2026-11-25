@@ -1,12 +1,13 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Activity, Boxes, ClipboardList, FileText, Siren, Gauge, Layers, LogOut, Menu, Moon, Network, PackageCheck, RotateCcw, ScanLine, Search, ShieldAlert, Sun, Truck, X, ChevronsUpDown } from 'lucide-react'
+import { Activity, Bell, BellOff, Boxes, ClipboardList, FileText, Siren, Gauge, Layers, LogOut, Menu, Moon, Network, PackageCheck, RotateCcw, ScanLine, Search, ShieldAlert, Sun, Truck, X, ChevronsUpDown } from 'lucide-react'
 import { useAuth, ROLE_LABEL, DEV_USERS } from '../auth/auth'
 import { API_MODE, api } from '../api/client'
 import { useGet } from '../api/hooks'
 import type { DashboardSummary } from '../api/types'
 import { Honesty, cx } from '../components/ui'
+import { LiveBadge, LiveEventsProvider, useLive } from '../live/LiveEvents'
 
 const NAV: { group: string; items: { to: string; label: string; icon: ReactNode; badge?: (s?: DashboardSummary) => number | undefined }[] }[] = [
   { group: 'Plant', items: [{ to: '/', label: 'Overview', icon: <Gauge size={16} /> }] },
@@ -90,7 +91,17 @@ function UserMenu() {
   )
 }
 
+function SirenToggle() {
+  const { status, muted, toggleMute } = useLive()
+  if (status === 'off') return null
+  return <button onClick={toggleMute} className="rounded-lg p-2 text-muted hover:bg-surface-2 hover:text-ink" aria-label={muted ? 'Unmute alert siren' : 'Mute alert siren'} title={muted ? 'Siren muted' : 'Siren on for critical alerts'}>{muted ? <BellOff size={15} /> : <Bell size={15} />}</button>
+}
+
 export function AppShell() {
+  return <LiveEventsProvider><Shell /></LiveEventsProvider>
+}
+
+function Shell() {
   const { dark, toggle } = useTheme()
   const { can, unverified } = useAuth()
   const [mobileNav, setMobileNav] = useState(false)
@@ -151,7 +162,9 @@ export function AppShell() {
           <SearchBox />
           <div className="ml-auto flex items-center gap-2">
             {API_MODE === 'mock' && <Honesty kind="mock" />}
+            <LiveBadge />
             {unverified && <span title={`Server not reachable (${unverified}); showing the cached session until it can be re-verified.`}><Honesty kind="provisional">OFFLINE · ID UNVERIFIED</Honesty></span>}
+            <SirenToggle />
             <button onClick={toggle} className="rounded-lg p-2 text-muted hover:bg-surface-2 hover:text-ink" aria-label="Toggle theme">{dark ? <Sun size={15} /> : <Moon size={15} />}</button>
             <UserMenu />
           </div>
