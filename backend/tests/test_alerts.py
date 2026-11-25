@@ -50,4 +50,5 @@ def test_committed_alert_reaches_websocket(client, auth):
         aid = make_alert("k-ws")
         ev = ws.receive_json()
         assert ev["type"] == "ALERT_CREATED" and ev["payload"]["alert_id"] == aid and ev["audible_siren"] is True
+        assert ev["payload"]["alert_type"] == "SEAL_TAMPER" and ev["payload"]["package"] == "PKG-1"  # the UI names the alert from this
         assert ev["severity"] == "CRITICAL" and ev["timestamp"].endswith("Z")
