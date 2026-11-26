@@ -54,7 +54,7 @@ class ReasonIn(BaseModel):
 
 
 def _transition(db: Session, alert_id: str, p: Principal, target: str, reason: str) -> dict:
-    a = db.scalars(select(m.Alert).where(m.Alert.id == alert_id).with_for_update()).first()
+    a = db.scalars(select(m.Alert).where(m.Alert.id == alert_id).with_for_update().execution_options(populate_existing=True)).first()
     if not a:
         raise ApiError(404, "ALERT_NOT_FOUND", "Alert not found")
     if a.status == "RESOLVED" or (target == "ACK" and a.status == "ACK"):

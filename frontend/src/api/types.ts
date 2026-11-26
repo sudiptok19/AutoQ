@@ -82,6 +82,8 @@ export interface Shipment {
 export interface OfflineAuthorization {
   snapshot_id: string; device_id: string; operator: string; issued_at: string; expires_at: string; expired: boolean
   settlement: 'ACKNOWLEDGED' | 'SUPERSEDED' | 'RECOVERED' | 'LEGACY' | null; settled_at: string | null
+  /** Lost device: offline authority ended; the shipment stays blocked until physical reconciliation is recorded. */
+  recovery_requested_at?: string | null; recovery_task_id?: string | null
 }
 export type GateName = 'SIGNATURE' | 'KEY' | 'IDENTITY' | 'LIFECYCLE' | 'CONTAINMENT' | 'QUARANTINE' | 'ORDER' | 'DUPLICATE' | 'SEAL' | 'QUANTITY' | 'SEQUENCE'
 export interface GateCheck { gate: GateName; status: 'PASS' | 'FAIL' | 'SKIP' | 'WARN'; detail?: string }

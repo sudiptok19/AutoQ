@@ -241,7 +241,7 @@ def calibrate_profile(db: Session, p: Principal, profile_id: str, hold: float, r
     import json as _json
 
     from app.features.component_vision.service import METHOD_VERSION, validate_reference
-    old = db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.id == profile_id).with_for_update()).first()
+    old = db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.id == profile_id).with_for_update().execution_options(populate_existing=True)).first()
     if not old:
         raise ApiError(404, "PROFILE_NOT_FOUND", "Inspection profile not found")
     if not old.active:

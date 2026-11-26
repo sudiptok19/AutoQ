@@ -17,7 +17,9 @@ class LockOrderViolation(RuntimeError):
 
 
 class LockSet:
-    """Tracks what this transaction has locked and refuses out-of-order acquisition."""
+    """Tracks what this transaction has locked and refuses out-of-order acquisition. Locked rows are re-read
+    (populate_existing): an object loaded earlier in the session must not keep pre-lock state, or a check made
+    "under the lock" would really be judging a stale read."""
 
     def __init__(self, db: Session):
         self.db = db
@@ -34,7 +36,7 @@ class LockSet:
         self.highest = max(self.highest, rank)
         if not want:
             return []
-        rows = self.db.scalars(select(cls).where(cls.id.in_(want)).order_by(cls.id).with_for_update()).all()
+        rows = self.db.scalars(select(cls).where(cls.id.in_(want)).order_by(cls.id).with_for_update().execution_options(populate_existing=True)).all()
         self.locked.setdefault(cls, set()).update(r.id for r in rows)
         return list(rows)
 
