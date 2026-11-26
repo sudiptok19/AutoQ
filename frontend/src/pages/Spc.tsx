@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, Scatter } from 'recharts'
 import { useAct, useGet } from '../api/hooks'
-import { api } from '../api/client'
+import { API_MODE, api } from '../api/client'
 import { useAuth } from '../auth/auth'
 import type { Line as LineT, Part, SpcSeries } from '../api/types'
-import { Button, Card, CardHeader, Honesty, Mono, PageHeader, Segmented, Status } from '../components/ui'
+import { Button, Card, CardHeader, ErrorBox, Honesty, Mono, PageHeader, Segmented, Status } from '../components/ui'
+import { SpcReviewPanel, type SpcReviewView } from '../components/SpcReview'
 
 const axis = { fontSize: 10.5, fill: 'var(--muted)', fontFamily: 'IBM Plex Mono' }
 function Tip({ active, payload }: any) {
@@ -31,6 +32,10 @@ export default function Spc() {
   const alertAt = alert ? (alert.at_index ?? pts.findIndex(p => p.inspection_id === alert.inspection_id)) : -1
   const alertOpen = !!alert && (alert.status ?? 'OPEN') === 'OPEN' && !!alerts?.items.some(a => a.id === alert.id && (a.status ?? 'OPEN') === 'OPEN')
   const synth = pts.filter(p => p.synthetic).length
+  const { data: reviews } = useGet<{ items: SpcReviewView[] }>(API_MODE === 'live' ? '/spc-reviews' : null)
+  const [openReview, setOpenReview] = useState<string | null>(null)
+  const investigate = useAct(() => api.post<SpcReviewView>('/spc-reviews', { inspection_id: alert!.inspection_id, alert_id: alert!.id }))
+  const shown = reviews?.items.find(r => r.id === openReview) ?? reviews?.items.find(r => r.alert_id === alert?.id)
   return (
     <div>
       <PageHeader eyebrow="Statistical process control" title="Drift monitor"
@@ -45,9 +50,19 @@ export default function Spc() {
         <Card className="mb-6 border-hold/50">
           <div className="flex flex-wrap items-center gap-3 p-4">
             <Status value="WARN" pulse /><div className="min-w-0 flex-1 text-[13px]">{alert.message}<div className="text-[11.5px] text-muted">Triggered at point #{alertAt}. All those parts still passed individually.</div></div>
+            {API_MODE === 'live' && alert.inspection_id && !reviews?.items.some(r => r.alert_id === alert.id) &&
+              <Button size="sm" variant="primary" disabled={!can('quality_engineer', 'quality_manager')} loading={investigate.isPending}
+                onClick={() => investigate.mutate(undefined, { onSuccess: r => setOpenReview(r.id) })}>Investigate scope</Button>}
             {alertOpen ? <Button size="sm" disabled={!can('quality_engineer', 'quality_manager')} onClick={() => ack.mutate(alert.id)}>Acknowledge</Button> : <span className="text-[12px] text-muted">acknowledged</span>}
           </div>
+          {investigate.error && <div className="px-4 pb-4"><ErrorBox error={investigate.error} /></div>}
+          {API_MODE === 'mock' && <div className="px-4 pb-3 text-[11.5px] text-muted">Containment scope reviews run on the live backend.</div>}
         </Card>
+      )}
+      {shown && <SpcReviewPanel key={shown.id} r={shown} />}
+      {!!reviews?.items.length && reviews.items.length > 1 && (
+        <div className="mb-6 flex flex-wrap items-center gap-1.5 text-[11.5px]"><span className="text-muted">Earlier reviews:</span>
+          {reviews.items.map(r => <button key={r.id} onClick={() => setOpenReview(r.id)} className="rounded-md border border-line px-2 py-0.5 hover:border-accent"><Mono>{r.target_serial ?? r.id.slice(-6)}</Mono> · {r.status.toLowerCase()}</button>)}</div>
       )}
       <Card className="mb-6">
         <CardHeader eyebrow="Anomaly score" title="Per-inspection score with baseline ±3σ" right={<><Honesty kind="not-probability" />{synth > 0 && <Honesty kind="synthetic">{synth} SYNTHETIC</Honesty>}</>} />

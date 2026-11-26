@@ -136,7 +136,7 @@ group('authorization close (P2)', () => {
 group('catch-up cursor (P2)', () => {
   const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) } }
   it('starts at "now" on a first visit, so nothing before it counts as missed', () => {
-    expect(loadCursor('qm', Date.parse('2026-11-26T10:00:00Z'), mem())).toEqual({ since: '2026-11-26T10:00:00.000Z', seen: [] })
+    expect(loadCursor('qm', Date.parse('2026-11-26T10:00:00Z'), mem())).toEqual({ since: '2026-11-26T10:00:00.000Z', seen: [], fresh: true })
   })
   it('advances to the newest event, never repeats one, and survives a reload', () => {
     const store = mem()
@@ -147,7 +147,7 @@ group('catch-up cursor (P2)', () => {
     expect(c.since).toBe('2026-11-26T10:05:00.000Z')
     saveCursor('qm', c, store)
     const back = loadCursor('qm', Date.now(), store)
-    expect(back.seen).toEqual(['e2', 'e1'])
+    expect(back.seen).toEqual(['e2', 'e1']) ; expect(back.fresh).toBeUndefined()      // a returning browser does catch up
     expect(advance(back, { event_id: 'e1', timestamp: '2026-11-26T10:04:00.000Z' })).toBe(false)
   })
   it('asks the server from a little before the cursor, to catch late-committing events', () => {

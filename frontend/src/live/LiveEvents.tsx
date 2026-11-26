@@ -59,6 +59,7 @@ export function LiveEventsProvider({ children }: { children: ReactNode }) {
     }
     // Durable catch-up from the server's outbox: whatever critical happened while this screen was not connected.
     const catchUp = async () => {
+      if (cursor.fresh) { cursor.fresh = false; saveCursor(who, cursor); return }   // first visit in this browser: start from now
       try {
         const r = await api.get<{ items: PlantEvent[]; truncated: boolean; as_of: string }>(`/events?since=${encodeURIComponent(catchUpFrom(cursor))}`)
         let loud = false

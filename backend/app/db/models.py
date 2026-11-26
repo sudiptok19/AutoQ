@@ -677,3 +677,26 @@ class ReportEvidence(Base):
     entity_type: Mapped[str] = mapped_column(String(40), primary_key=True)
     entity_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     sha256: Mapped[str | None] = mapped_column(ForeignKey("evidence.sha256"))
+
+
+class SpcReview(Base):
+    """A3 containment review: Astra's investigation and recommendation frozen verbatim with what Opus read, then a
+    human decision (write-once) and the quarantines executed for approved lots."""
+    __tablename__ = "spc_reviews"
+    __table_args__ = (CheckConstraint("status IN ('PROPOSED', 'APPROVED', 'REJECTED')", name="ck_spc_reviews_status"),)
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    alert_id: Mapped[str | None] = mapped_column(ForeignKey("alerts.id"))
+    target_inspection_id: Mapped[str] = mapped_column(ForeignKey("inspections.id"), index=True)
+    qualification_version: Mapped[str] = mapped_column(String(40))
+    recommendation_version: Mapped[str] = mapped_column(String(40))
+    investigation: Mapped[dict] = mapped_column(JSONB)
+    recommendation: Mapped[dict] = mapped_column(JSONB)
+    read_context: Mapped[dict] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(12), server_default=text("'PROPOSED'"))
+    approved_lot_ids: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    recall_ids: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(Ts, server_default=now)
+    decided_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    decided_at: Mapped[datetime | None] = mapped_column(Ts)
+    decision_reason: Mapped[str | None] = mapped_column(Text)
