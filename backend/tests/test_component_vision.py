@@ -19,6 +19,7 @@ from app.core import errors
 from app.core.auth import Principal, current_principal
 from app.core.errors import ApiError
 from app.db.session import get_db
+from app.features.component_vision import service as vision
 from app.features.component_vision._jpeg import jpeg_frame
 from app.features.component_vision.router import router
 from app.features.component_vision.service import (
@@ -157,6 +158,13 @@ def test_physical_inspection_report_evaluates_original_captures(tmp_path):
     defect = results["defect_02.jpg"]
     assert good["outcome"] == "ACCEPTED" and defect["outcome"] == "FLAGGED"
     assert good["score"] < defect["score"]
+    assert good["metrics"]["alignment"]["failure"] is None
+
+    off_center = results["good_01.jpg"]
+    assert off_center["outcome"] == "UNVERIFIABLE"
+    assert off_center["reasons"] == ["ALIGNMENT_FAILED"] and off_center["score"] is None
+    check_alignment_diagnostic(off_center["metrics"]["alignment"])
+    assert off_center["artifacts"] == {"aligned_png": False, "diff_png": False}
     for name, reason in {"blurry_01.jpg": "IMAGE_QUALITY_BLUR", "misaligned_01.jpg": "ALIGNMENT_FAILED"}.items():
         row = results[name]
         assert row["outcome"] == "UNVERIFIABLE" and row["score"] is None
@@ -225,6 +233,53 @@ def test_excessive_translation_gives_alignment_failure(part, golden, profile):
     check_unavailable(evidence, "ALIGNMENT_FAILED")
     assert evidence.quality_gate["passed"] is True
     assert evidence.analysis["calibrated"] is True
+    check_alignment_diagnostic(evidence.analysis["alignment"])
+
+
+def check_alignment_diagnostic(alignment):
+    assert alignment["failure"] in {
+        "NO_DESCRIPTORS", "TOO_FEW_MATCHES", "HOMOGRAPHY_FAILED", "TOO_FEW_INLIERS",
+        "LOW_INLIER_RATIO", "LOW_INLIER_COVERAGE", "INVALID_PROJECTED_FRAME",
+        "LOW_FRAME_OVERLAP", "LOW_ROI_SUPPORT", "LOW_CORRELATION",
+    }
+    assert alignment["probe_keypoints"] >= 0
+    assert alignment["reference_keypoints"] >= 0
+    if "matches" in alignment:
+        assert 0 <= alignment["matches"] <= min(alignment["probe_keypoints"], alignment["reference_keypoints"])
+    if "inliers" in alignment:
+        assert 0 <= alignment["inliers"] <= alignment["matches"]
+        assert alignment["inlier_ratio"] == pytest.approx(alignment["inliers"] / alignment["matches"], abs=1e-6)
+
+
+@pytest.mark.parametrize(("offset", "failure"), [(160, "LOW_FRAME_OVERLAP"), (0, "LOW_ROI_SUPPORT")])
+def test_alignment_reports_the_first_failed_geometry_check(golden, profile, monkeypatch, offset, failure):
+    # Supply fixed correspondences and a fitted model so ORB and RANSAC cannot change the first failing check.
+    points = [(32, 32), (224, 32), (416, 32), (32, 224), (416, 224), (32, 416), (224, 416), (416, 416)]
+    probe = [cv2.KeyPoint(x, y, 1) for x, y in points]
+    reference = [cv2.KeyPoint(x + offset, y, 1) for x, y in points]
+    descriptors = np.zeros((len(points), 32), dtype=np.uint8)
+    features = iter(((probe, descriptors), (reference, descriptors)))
+    model = np.array([[1, 0, offset], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
+    monkeypatch.setattr(vision, "_features", lambda gray: next(features))
+    monkeypatch.setattr(vision, "_matches", lambda first, second: [(i, i) for i in range(len(points))])
+    monkeypatch.setattr(cv2, "findHomography", lambda *args, **kwargs: (model, np.ones((len(points), 1), dtype=np.uint8)))
+    tiny_roi = replace(profile, thresholds={**profile.thresholds, "min_inliers": 8, "roi": (0.4, 0.4, 0.01, 0.01)})
+
+    evidence = evaluate(golden, golden, tiny_roi, evidence_source=SOURCE)
+
+    check_unavailable(evidence, "ALIGNMENT_FAILED")
+    alignment = evidence.analysis["alignment"]
+    assert alignment["failure"] == failure
+    assert alignment["inliers"] == len(points)
+    assert alignment["inlier_ratio"] == 1.0
+    overlap = min(alignment["projected_probe_overlap"], alignment["reference_overlap"])
+    if offset:
+        assert overlap < alignment["thresholds"]["min_overlap"]
+        assert "usable_roi_pixels" not in alignment
+    else:
+        assert overlap >= alignment["thresholds"]["min_overlap"]
+        assert alignment["usable_roi_pixels"] < alignment["thresholds"]["min_usable_roi_pixels"]
+    assert "correlation" not in alignment
 
 
 def test_registered_difference_scores_visible_defect_and_emits_pngs(part, golden, profile):
@@ -244,6 +299,10 @@ def test_registered_difference_scores_visible_defect_and_emits_pngs(part, golden
     assert result.reason_codes == ["SCORE_ABOVE_REJECT"]
     assert result.analysis["score"] == result.raw_score
     assert result.analysis["calibrated"] is True
+    alignment = result.analysis["alignment"]
+    assert alignment["failure"] is None
+    assert alignment["usable_roi_pixels"] >= alignment["thresholds"]["min_usable_roi_pixels"]
+    assert alignment["correlation"] >= alignment["thresholds"]["min_correlation"]
     assert result.evidence_source == SOURCE
     region = result.analysis["regions"][0]
     assert region["x"] <= 475 < region["x"] + region["w"]
