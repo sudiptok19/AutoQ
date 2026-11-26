@@ -299,5 +299,154 @@
       ]
     },
     "hash": "42528cdd9bfe63776fc5f2e64d11801a73516f8396ead7ac25ab7cc80fae3374"
+  },
+  "chain_v2": {
+    "produced_by": "TypeScript canonicalizer and Node SHA-256 with the proposed v2 projection",
+    "valid": [
+      {
+        "name": "legacy_head_to_provisional",
+        "prev_hash": "42528cdd9bfe63776fc5f2e64d11801a73516f8396ead7ac25ab7cc80fae3374",
+        "event": {
+          "client_event_id": "dock-phone-001:000002",
+          "seq": 2,
+          "token": "AQ1.eyJpYXQiOjE3OTUzMDAwMDAsImlkIjoicGtnLWpzLW5vYmxlLTAwMSIsIml0ZW1zIjpbInBwLXZlY3Rvci0wMDEiXSwia2lkIjoiYXEtaW50ZXJvcC0xIiwibGFiZWwiOiLojbfmnK0tNDIiLCJvcmRlciI6Im9yZGVyLTAwMSIsInNlYWwiOiIwMGRmMjAzYzdlNmFiNTE0N2Q2YzA5NDk2ODRmNzc1ZjI5YjIxNzYxMmQ3ZDVjYzIxYjVhYmM3Yjg2NzUwZmQ4Iiwic2VhbF9yZXZpc2lvbl9pZCI6InNlYWwtcmV2aXNpb24tMDAyIiwidHlwIjoiUEtHIiwidiI6Mn0.WDRBI5lFZjD7C1k6JoFTp6D4H_r-xu1rleDQZ6IDcMPh1r3_peXLR7Lyzhq2KQjO6oOC6fszOGLVqxzB3OBBBw",
+          "shipment_id": "shipment-001",
+          "scanned_at": "2026-11-21T22:27:40.000Z",
+          "local_decision": "PROVISIONAL_ACCEPT",
+          "chain_version": 2,
+          "snapshot_id": "snap-vector-001"
+        },
+        "canonical": "{\"chain_version\":2,\"client_event_id\":\"dock-phone-001:000002\",\"local_decision\":\"PROVISIONAL_ACCEPT\",\"scanned_at\":\"2026-11-21T22:27:40.000Z\",\"seq\":2,\"shipment_id\":\"shipment-001\",\"snapshot_id\":\"snap-vector-001\",\"token\":\"AQ1.eyJpYXQiOjE3OTUzMDAwMDAsImlkIjoicGtnLWpzLW5vYmxlLTAwMSIsIml0ZW1zIjpbInBwLXZlY3Rvci0wMDEiXSwia2lkIjoiYXEtaW50ZXJvcC0xIiwibGFiZWwiOiLojbfmnK0tNDIiLCJvcmRlciI6Im9yZGVyLTAwMSIsInNlYWwiOiIwMGRmMjAzYzdlNmFiNTE0N2Q2YzA5NDk2ODRmNzc1ZjI5YjIxNzYxMmQ3ZDVjYzIxYjVhYmM3Yjg2NzUwZmQ4Iiwic2VhbF9yZXZpc2lvbl9pZCI6InNlYWwtcmV2aXNpb24tMDAyIiwidHlwIjoiUEtHIiwidiI6Mn0.WDRBI5lFZjD7C1k6JoFTp6D4H_r-xu1rleDQZ6IDcMPh1r3_peXLR7Lyzhq2KQjO6oOC6fszOGLVqxzB3OBBBw\"}",
+        "hash": "ea79235861569132f7ede5a1dd57974f553c7b0d6f7669b234ea59c0b9bd3016"
+      },
+      {
+        "name": "online_explicit_null",
+        "prev_hash": "ea79235861569132f7ede5a1dd57974f553c7b0d6f7669b234ea59c0b9bd3016",
+        "event": {
+          "client_event_id": "dock-phone-001:000003",
+          "seq": 3,
+          "token": "AQ1.eyJpYXQiOjE3OTUzMDAwMDAsImlkIjoicGtnLWpzLW5vYmxlLTAwMSIsIml0ZW1zIjpbInBwLXZlY3Rvci0wMDEiXSwia2lkIjoiYXEtaW50ZXJvcC0xIiwibGFiZWwiOiLojbfmnK0tNDIiLCJvcmRlciI6Im9yZGVyLTAwMSIsInNlYWwiOiIwMGRmMjAzYzdlNmFiNTE0N2Q2YzA5NDk2ODRmNzc1ZjI5YjIxNzYxMmQ3ZDVjYzIxYjVhYmM3Yjg2NzUwZmQ4Iiwic2VhbF9yZXZpc2lvbl9pZCI6InNlYWwtcmV2aXNpb24tMDAyIiwidHlwIjoiUEtHIiwidiI6Mn0.WDRBI5lFZjD7C1k6JoFTp6D4H_r-xu1rleDQZ6IDcMPh1r3_peXLR7Lyzhq2KQjO6oOC6fszOGLVqxzB3OBBBw",
+          "shipment_id": "shipment-001",
+          "scanned_at": "2026-11-22T03:57:40.000+05:30",
+          "local_decision": "ONLINE",
+          "chain_version": 2,
+          "snapshot_id": null
+        },
+        "canonical": "{\"chain_version\":2,\"client_event_id\":\"dock-phone-001:000003\",\"local_decision\":\"ONLINE\",\"scanned_at\":\"2026-11-22T03:57:40.000+05:30\",\"seq\":3,\"shipment_id\":\"shipment-001\",\"snapshot_id\":null,\"token\":\"AQ1.eyJpYXQiOjE3OTUzMDAwMDAsImlkIjoicGtnLWpzLW5vYmxlLTAwMSIsIml0ZW1zIjpbInBwLXZlY3Rvci0wMDEiXSwia2lkIjoiYXEtaW50ZXJvcC0xIiwibGFiZWwiOiLojbfmnK0tNDIiLCJvcmRlciI6Im9yZGVyLTAwMSIsInNlYWwiOiIwMGRmMjAzYzdlNmFiNTE0N2Q2YzA5NDk2ODRmNzc1ZjI5YjIxNzYxMmQ3ZDVjYzIxYjVhYmM3Yjg2NzUwZmQ4Iiwic2VhbF9yZXZpc2lvbl9pZCI6InNlYWwtcmV2aXNpb24tMDAyIiwidHlwIjoiUEtHIiwidiI6Mn0.WDRBI5lFZjD7C1k6JoFTp6D4H_r-xu1rleDQZ6IDcMPh1r3_peXLR7Lyzhq2KQjO6oOC6fszOGLVqxzB3OBBBw\"}",
+        "hash": "bdfed1ee786348c21a4cddd151c6ea14a6388e88291fa0b8ecb913e1b8379037"
+      },
+      {
+        "name": "local_block_opaque_unicode_label",
+        "prev_hash": "bdfed1ee786348c21a4cddd151c6ea14a6388e88291fa0b8ecb913e1b8379037",
+        "event": {
+          "client_event_id": "dock-phone-001:000004",
+          "seq": 4,
+          "token": "unreadable 📦 é\n\"",
+          "shipment_id": "shipment-001",
+          "scanned_at": "2026-11-21T22:27:40.000Z",
+          "local_decision": "LOCAL_BLOCK",
+          "chain_version": 2,
+          "snapshot_id": "snap-vector-002"
+        },
+        "canonical": "{\"chain_version\":2,\"client_event_id\":\"dock-phone-001:000004\",\"local_decision\":\"LOCAL_BLOCK\",\"scanned_at\":\"2026-11-21T22:27:40.000Z\",\"seq\":4,\"shipment_id\":\"shipment-001\",\"snapshot_id\":\"snap-vector-002\",\"token\":\"unreadable 📦 é\\n\\\"\"}",
+        "hash": "9fdcc484db9537061fe96871a64aede86c9041b1b7f0079623da3681efde09bf"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "online_missing_snapshot",
+        "base": "online_explicit_null",
+        "omit": [
+          "snapshot_id"
+        ],
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "offline_null_snapshot",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "snapshot_id": null
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "local_block_missing_snapshot",
+        "base": "local_block_opaque_unicode_label",
+        "omit": [
+          "snapshot_id"
+        ],
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "online_named_snapshot",
+        "base": "online_explicit_null",
+        "changes": {
+          "snapshot_id": "snap-vector-001"
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "null_version",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "chain_version": null
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "boolean_version",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "chain_version": true
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "string_version",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "chain_version": "2"
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "unsupported_version",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "chain_version": 3
+        },
+        "code": "VERSION_UNSUPPORTED"
+      },
+      {
+        "name": "unsafe_sequence",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "seq": 9007199254740992
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "malformed_id",
+        "base": "legacy_head_to_provisional",
+        "changes": {
+          "snapshot_id": "snap-vector-001 "
+        },
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "uppercase_predecessor",
+        "base": "legacy_head_to_provisional",
+        "prev_hash": "42528CDD9BFE63776FC5F2E64D11801A73516F8396EAD7AC25AB7CC80FAE3374",
+        "code": "SCHEMA_INVALID"
+      },
+      {
+        "name": "unpaired_surrogate",
+        "base": "local_block_opaque_unicode_label",
+        "changes": {
+          "token": "\ud800"
+        },
+        "code": "SCHEMA_INVALID"
+      }
+    ]
   }
 }

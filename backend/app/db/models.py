@@ -10,7 +10,7 @@ Conventions
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, SmallInteger, String, Text,
     UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -491,6 +491,7 @@ class Device(Base):
     operator_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     last_seq: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     head_hash: Mapped[str] = mapped_column(String(64), server_default=text("repeat('0', 64)"))
+    chain_version_high: Mapped[int] = mapped_column(SmallInteger, server_default=text("1"))   # highest chain version written
     registered_at: Mapped[datetime] = mapped_column(Ts, server_default=now)
 
 
@@ -529,6 +530,7 @@ class DeviceEvent(Base):
     snapshot_id: Mapped[str | None] = mapped_column(ForeignKey("offline_snapshots.id"))   # validated association only
     claimed_snapshot_id: Mapped[str | None] = mapped_column(String(40))                   # what the device sent, verbatim
     claim_recorded: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))   # false = pre-0006 row, claim unknown
+    chain_version: Mapped[int] = mapped_column(SmallInteger, server_default=text("1"))       # hashed under this version
     scan_id: Mapped[str | None] = mapped_column(ForeignKey("scans.id"))
     local_decision: Mapped[str] = mapped_column(String(20))
     outcome: Mapped[str] = mapped_column(String(10))

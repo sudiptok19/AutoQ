@@ -50,4 +50,11 @@ Short entries. Newest at the bottom. Format: decision — why — tradeoff.
     - **Replay:** distinguishes a recorded null snapshot claim from pre-0006 rows whose claim is unknown, and compares the submitted `prev_hash`.
 
     — Tradeoff: honest phones that sync after expiry or settlement now need a physical check instead of loading automatically.
+32. **Device-chain v2: readers first, then writers by policy, then the floor.** Astra's `chain_hash` (A4) reads v1 (six fields) and v2 (plus `chain_version` and the exact capture `snapshot_id`, null for ONLINE). The browser mirrors it and both are checked against the same interop vectors.
+    - **Rollout:** two policy knobs (`offline.chain_writer_version`, `offline.chain_min_version`) roll the plant forward. The floor can never exceed the writer. Publishing a policy takes an advisory lock exclusively; each replayed event holds it shared while judging, so a floor change never splits a decision.
+    - **Below-floor and regressions:** an event below the floor, or below what its device already wrote (an outdated tab), is still recorded so the chain and settlement can proceed, but it never confers load authority.
+    - **Immutability:** history is enforced by the database. `device_events` is immutable, a snapshot's identity and expiry are immutable and its settlement is write-once, and a device checkpoint only advances, and only to a recorded event (checked at commit).
+    - **Expiry:** taken from the signed snapshot payload, which must agree with the stored row.
+
+    — Tradeoff: tests and repair scripts can no longer patch these rows. Corrections are new records.
 

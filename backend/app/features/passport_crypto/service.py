@@ -45,6 +45,10 @@ _COMMON_FIELDS = {"v", "typ", "kid", "id", "iat"}
 
 GENESIS = "0" * 64
 _CHAIN_FIELDS = ("client_event_id", "seq", "token", "shipment_id", "scanned_at", "local_decision")
+_CHAIN_V2_FIELDS = (*_CHAIN_FIELDS, "chain_version", "snapshot_id")
+_CHAIN_EVENT_ID = re.compile(r"[A-Za-z0-9:._-]{1,80}")
+_CHAIN_RESOURCE_ID = re.compile(r"[A-Za-z0-9._-]{1,40}")
+_CHAIN_OFFLINE_DECISIONS = ("PROVISIONAL_ACCEPT", "LOCAL_BLOCK")
 
 
 class CryptoError(Exception):
@@ -353,17 +357,55 @@ def verify_snapshot(
     return snapshot
 
 
+def _validate_chain_v2(prev_hash: str, projection: dict[str, object]) -> None:
+    if prev_hash != prev_hash.lower():
+        raise CryptoError("SCHEMA_INVALID", "Version 2 requires a lowercase previous scan hash")
+    if not _uint(projection["seq"]) or projection["seq"] == 0:
+        raise CryptoError("SCHEMA_INVALID", "Version 2 requires a positive JS-safe scan sequence")
+    if not _CHAIN_EVENT_ID.fullmatch(projection["client_event_id"]):
+        raise CryptoError("SCHEMA_INVALID", "Invalid scan event ID")
+    if not _CHAIN_RESOURCE_ID.fullmatch(projection["shipment_id"]):
+        raise CryptoError("SCHEMA_INVALID", "Invalid scan shipment ID")
+    if not projection["token"] or not projection["scanned_at"]:
+        raise CryptoError("SCHEMA_INVALID", "Scan token and capture time text must be nonempty")
+    decision, snapshot_id = projection["local_decision"], projection["snapshot_id"]
+    if decision == "ONLINE":
+        if snapshot_id is not None:
+            raise CryptoError("SCHEMA_INVALID", "Online events require an explicit null snapshot ID")
+    elif decision in _CHAIN_OFFLINE_DECISIONS:
+        if not isinstance(snapshot_id, str) or not _CHAIN_RESOURCE_ID.fullmatch(snapshot_id):
+            raise CryptoError("SCHEMA_INVALID", "Offline events require the exact capture snapshot ID")
+    else:
+        raise CryptoError("SCHEMA_INVALID", "Invalid local scan decision")
+
+
 def chain_hash(prev_hash: str, event: Mapping[str, object]) -> str:
-    """Hash the six scan fields in frontend/src/lib/chain.ts against the previous head."""
+    """Hash a canonical scan projection against the previous head without changing AQ1.
+
+    An omitted version selects the original six fields. Version 2 binds its version
+    and capture snapshot. Callers must enforce the allowed version at each sequence
+    and supply the authoritative previous head. This unkeyed hash does not identify
+    the capturing device or attest to its clock or unsynced history.
+    """
     if not isinstance(prev_hash, str) or not _SHA256_HEX.fullmatch(prev_hash):
         raise CryptoError("SCHEMA_INVALID", "Previous scan hash must be 64 hex characters")
+    if not isinstance(event, Mapping):
+        raise CryptoError("SCHEMA_INVALID", "Scan event must be a JSON object")
+    version = event.get("chain_version", 1)
+    if type(version) is not int:
+        raise CryptoError("SCHEMA_INVALID", "Scan chain version must be an integer")
+    if version not in (1, 2):
+        raise CryptoError("VERSION_UNSUPPORTED", "Scan chain version is unsupported")
     try:
-        projection = {field: event[field] for field in _CHAIN_FIELDS}
+        fields = _CHAIN_V2_FIELDS if version == 2 else _CHAIN_FIELDS
+        projection = {field: event[field] for field in fields}
     except KeyError as exc:
         raise CryptoError("SCHEMA_INVALID", f"Scan event is missing {exc.args[0]}") from exc
     if any(not isinstance(projection[field], str) for field in _CHAIN_FIELDS if field != "seq"):
         raise CryptoError("SCHEMA_INVALID", "Scan projection claims other than seq must be strings")
     if type(projection["seq"]) is not int:
         raise CryptoError("SCHEMA_INVALID", "Scan sequence must be an integer")
+    if version == 2:
+        _validate_chain_v2(prev_hash, projection)
     data = _canonical_bytes(projection, "SCHEMA_INVALID")
     return sha256(prev_hash.encode("ascii") + b"|" + data).hexdigest()
