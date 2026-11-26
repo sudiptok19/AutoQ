@@ -128,10 +128,12 @@ def test_catch_up_returns_missed_critical_events_from_the_outbox(client, auth, d
         outbox.emit(s, "SEGREGATION_TASK_CREATED", "PACKAGE", "p1", severity="MEDIUM", audible_siren=True)  # loud: caught up
         s.commit()
     r = client.get(f"{API}/events", params={"since": since}, headers=auth("op.ravi")).json()
-    assert [e["type"] for e in r["items"]] == ["ALERT_CREATED", "SEGREGATION_TASK_CREATED"] and r["truncated"] is False
-    assert r["items"][0]["payload"]["alert_type"] == "SEAL_TAMPER" and r["items"][0]["timestamp"].endswith("Z")
+    # Same transaction → same created_at; order within it follows the (random-suffixed) id, so compare as a set.
+    assert sorted(e["type"] for e in r["items"]) == ["ALERT_CREATED", "SEGREGATION_TASK_CREATED"] and r["truncated"] is False
+    alert = next(e for e in r["items"] if e["type"] == "ALERT_CREATED")
+    assert alert["payload"]["alert_type"] == "SEAL_TAMPER" and alert["timestamp"].endswith("Z")
     # The same rows the socket sends, even if their live push never happened (sent_at is irrelevant here).
-    assert db.get(m.OutboxEvent, r["items"][0]["event_id"]) is not None
+    assert db.get(m.OutboxEvent, alert["event_id"]) is not None
 
 
 def test_catch_up_is_bounded_and_strict_about_time(client, auth):
