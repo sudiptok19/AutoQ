@@ -5,13 +5,13 @@ import { BellRing, X } from 'lucide-react'
 import { API_MODE, api } from '../api/client'
 import { useAuth } from '../auth/auth'
 import { cx, toneVar } from '../components/ui'
-import { connect, describe, eventsUrl, type Notice, type SocketStatus } from './events'
+import { advance, catchUpFrom, connect, describe, eventsUrl, loadCursor, saveCursor, type Notice, type PlantEvent, type SocketStatus } from './events'
 
 interface Ctx { status: SocketStatus | 'off'; muted: boolean; toggleMute: () => void }
 const LiveCtx = createContext<Ctx>({ status: 'off', muted: false, toggleMute: () => {} })
 export const useLive = () => useContext(LiveCtx)
 
-type Toast = Notice & { id: string; count: number; at: number }
+type Toast = Notice & { id: string; count: number; at: number; missed?: boolean }
 const MAX_TOASTS = 4
 
 /** Two short tones. Browsers only allow audio after the user has interacted with the page; if blocked, stay silent. */
@@ -41,23 +41,43 @@ export function LiveEventsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (API_MODE !== 'live' || !user) { setStatus('off'); return }
+    const who = user.username
+    const cursor = loadCursor(who)
     // Bursts (a recall holds dozens of packages) collapse into one refetch of whatever is on screen.
     const invalidate = () => { clearTimeout(refetch.current); refetch.current = setTimeout(() => qc.invalidateQueries(), 250) }
+    const notify = (e: PlantEvent, missed: boolean): boolean => {
+      if (!advance(cursor, e)) return false          // already shown in this browser (socket, catch-up or a reload)
+      saveCursor(who, cursor)
+      const n = describe(e)
+      if (!n) return false
+      setToasts(ts => {
+        const same = ts.find(t => t.title === n.title && t.body === n.body)
+        if (same) return ts.map(t => (t === same ? { ...t, count: t.count + 1, at: Date.now() } : t))
+        return [{ ...n, id: e.event_id, count: 1, at: Date.now(), missed }, ...ts].slice(0, MAX_TOASTS)
+      })
+      return n.siren
+    }
+    // Durable catch-up from the server's outbox: whatever critical happened while this screen was not connected.
+    const catchUp = async () => {
+      try {
+        const r = await api.get<{ items: PlantEvent[]; truncated: boolean; as_of: string }>(`/events?since=${encodeURIComponent(catchUpFrom(cursor))}`)
+        let loud = false
+        for (const e of r.items) loud = notify(e, true) || loud
+        if (loud && !mutedRef.current) siren()     // once for the whole backlog, not once per event
+        if (r.truncated) setToasts(ts => [{ title: 'More alerts were missed than shown', body: 'Open the plant overview for the full list', href: '/', tone: 'hold' as const, siren: false, id: `trunc-${r.as_of}`, count: 1, at: Date.now(), missed: true }, ...ts].slice(0, MAX_TOASTS))
+        if (Date.parse(r.as_of) > Date.parse(cursor.since) && !r.items.length) { cursor.since = r.as_of; saveCursor(who, cursor) }
+      } catch { /* the socket keeps running; the next reconnect tries again */ }
+    }
     const stop = connect({
       ticket: async () => (await api.post<{ ticket: string }>('/ws/tickets')).ticket,
       url: eventsUrl,
       onStatus: setStatus,
-      onSync: invalidate,
+      onSync: () => { invalidate(); catchUp() },
+      // Deactivated, role change or session end: re-check who is signed in (signs out if the server says so).
+      onAuthClosed: () => window.dispatchEvent(new Event('autoq:reverify')),
       onEvent: e => {
         invalidate()
-        const n = describe(e)
-        if (!n) return
-        if (n.siren && !mutedRef.current) siren()
-        setToasts(ts => {
-          const same = ts.find(t => t.title === n.title && t.body === n.body)
-          if (same) return ts.map(t => (t === same ? { ...t, count: t.count + 1, at: Date.now() } : t))
-          return [{ ...n, id: e.event_id, count: 1, at: Date.now() }, ...ts].slice(0, MAX_TOASTS)
-        })
+        if (notify(e, false) && !mutedRef.current) siren()
       },
     })
     return () => { stop(); clearTimeout(refetch.current); setStatus('off') }
@@ -80,7 +100,7 @@ export function LiveEventsProvider({ children }: { children: ReactNode }) {
             <div className="flex items-start gap-3 p-3">
               <span className="mt-0.5" style={{ color: toneVar[t.tone] }}><BellRing size={16} /></span>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-[13px] font-semibold">{t.title}{t.count > 1 && <span className="num rounded bg-surface-2 px-1.5 text-[10.5px] text-muted">×{t.count}</span>}</div>
+                <div className="flex items-center gap-2 text-[13px] font-semibold">{t.title}{t.count > 1 && <span className="num rounded bg-surface-2 px-1.5 text-[10.5px] text-muted">×{t.count}</span>}{t.missed && <span className="rounded border border-line px-1 font-mono text-[9.5px] font-normal tracking-wider text-muted">WHILE DISCONNECTED</span>}</div>
                 {t.body && <div className="mt-0.5 truncate font-mono text-[11.5px] text-muted" title={t.body}>{t.body}</div>}
                 <Link to={t.href} onClick={() => dismiss(t.id)} className="mt-1.5 inline-block text-[12px] text-accent hover:underline">Open →</Link>
               </div>

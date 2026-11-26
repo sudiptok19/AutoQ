@@ -77,6 +77,16 @@ def principal_from_token(db: Session, token: str) -> Principal:
     return p
 
 
+def session_expiry(request: Request) -> datetime | None:
+    """When the bearer session behind this (already authenticated) request expires."""
+    h = request.headers.get("authorization", "")
+    try:
+        exp = jwt.decode(h[7:].strip(), _secret(), algorithms=[ALG], options={"require": ["exp"]})["exp"]
+    except jwt.PyJWTError:
+        return None
+    return datetime.fromtimestamp(exp, UTC)
+
+
 def current_principal(request: Request, db: Session = Depends(get_db)) -> Principal:
     h = request.headers.get("authorization", "")
     if not h.lower().startswith("bearer "):

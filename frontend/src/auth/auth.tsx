@@ -20,8 +20,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     verify().finally(() => setLoading(false))
     const out = () => { cacheUser(null); setUser(null); setUnverified(null) }
     const back = () => { if (getToken()) verify() }   // re-verify when signal returns
-    window.addEventListener('autoq:logout', out); window.addEventListener('online', back)
-    return () => { window.removeEventListener('autoq:logout', out); window.removeEventListener('online', back) }
+    // The live event socket asks for this when the server ends it over authorization (deactivated, roles, session end).
+    window.addEventListener('autoq:logout', out); window.addEventListener('online', back); window.addEventListener('autoq:reverify', back)
+    return () => { window.removeEventListener('autoq:logout', out); window.removeEventListener('online', back); window.removeEventListener('autoq:reverify', back) }
   }, [])
   const login = async (username: string, password: string) => {
     const r = await api.post<{ access_token: string; user: User }>('/auth/login', { username, password })
