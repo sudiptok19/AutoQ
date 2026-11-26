@@ -90,7 +90,7 @@ export const AUTH_CLOSE = new Set(['ACCOUNT_INACTIVE', 'NO_ROLES', 'ROLES_CHANGE
 
 /** Per-user durable cursor for catch-up: the newest event time this browser has handled, and the ids it has shown,
  *  so the deliberate overlap window never repeats a pop-up even across reloads. */
-export interface Cursor { since: string; seen: string[] }
+export interface Cursor { since: string; seen: string[]; /** no earlier visit: nothing can have been missed yet */ fresh?: boolean }
 export const OVERLAP_MS = 2 * 60_000   // a long transaction can commit an event stamped slightly before the last one seen
 const SEEN_KEEP = 300
 
@@ -99,7 +99,7 @@ export function loadCursor(user: string, now = Date.now(), store: Pick<Storage, 
     const c = JSON.parse(store?.getItem(`autoq-events:${user}`) ?? 'null')
     if (c && typeof c.since === 'string' && Array.isArray(c.seen)) return c
   } catch { /* corrupt or blocked storage: start fresh */ }
-  return { since: new Date(now).toISOString(), seen: [] }   // first visit: nothing is "missed" before it
+  return { since: new Date(now).toISOString(), seen: [], fresh: true }   // first visit: nothing is "missed" before it
 }
 export function saveCursor(user: string, c: Cursor, store: Pick<Storage, 'setItem'> | undefined = globalThis.localStorage) {
   try { store?.setItem(`autoq-events:${user}`, JSON.stringify({ since: c.since, seen: c.seen.slice(-SEEN_KEEP) })) } catch { /* ignore */ }

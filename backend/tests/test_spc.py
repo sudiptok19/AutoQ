@@ -11,12 +11,21 @@ from app.db.session import get_db
 from app.features.spc.router import router
 from app.features.spc.service import (
     INVESTIGATION_QUALIFICATION_VERSION,
+    ContainmentGenealogy,
+    ExposureEvidence,
+    FourMChange,
     InvestigationContext,
     InvestigationGap,
     InvestigationObservation,
+    LotExposureLink,
+    LotGenealogy,
+    OngoingExposureLink,
+    ScopeFinding,
+    UnitGenealogy,
     compute_series,
     freeze_baseline,
     investigate,
+    recommend_containment,
 )
 from app.ports import SpcBaseline, SpcPoint, SpcRule, ports
 
@@ -369,6 +378,150 @@ def test_investigation_requires_valid_reference_digests():
     with pytest.raises(errors.ApiError) as error:
         investigate(replace(CONTEXT, reference_sha256="unknown"), events, events[-1].inspection_id, RULE)
     assert error.value.code == "SPC_INPUT_INVALID"
+
+
+def _containment_signal():
+    events = _routine_observations([*BASE_SCORES, 0.6, 0.65, 0.7, 0.8, 0.9, 1.0])
+    events[-1] = replace(events[-1], routine=False, unit_id=events[-2].unit_id, t=events[-3].t)
+    return _investigate(events, events[-2]), events
+
+
+def test_containment_deduplicates_overlapping_rules_and_does_not_infer_production_order():
+    signal, events = _containment_signal()
+    assert signal.rules == ("CUSUM_UPPER", "FIVE_RISING")
+    assert signal.cusum.anchor_observation_id != signal.five_rising.anchor_observation_id
+    lots = tuple(LotGenealogy(lot, CONTEXT.part_id, "line-1") for lot in ("lot-01", "lot-02", "lot-03"))
+    units = tuple(UnitGenealogy(e.unit_id, "lot-03" if i < 6 else "lot-01") for i, e in enumerate(events[:-1]))
+    unsampled = UnitGenealogy("unsampled", "lot-02")
+    genealogy = ContainmentGenealogy("line-1", lots, (*units, unsampled))
+    result = recommend_containment(signal, genealogy)
+    assert result == recommend_containment(signal, replace(genealogy, lots=lots[::-1], units=(*units[::-1], *units, unsampled)))
+    delayed = [replace(e, t=e.t + timedelta(days=5)) if i == 7 else e for i, e in enumerate(events)]
+    assert result == recommend_containment(_investigate(delayed, delayed[7]), genealogy)
+    assert result.status == "REVIEW_RECOMMENDED"
+    assert [row.inspection_id for row in result.confirmed_observations] == [e.inspection_id for e in events[3:-1]]
+    assert result.confirmed_observations[0].rules == ("FIVE_RISING",)
+    assert all(row.rules == signal.rules for row in result.confirmed_observations[1:])
+    first, last = result.proposed_lots
+    assert (first.lot_id, last.lot_id) == ("lot-01", "lot-03")
+    assert last.basis == ("SIGNAL_CONTRIBUTOR",)
+    assert last.supporting_inspection_ids == tuple(e.inspection_id for e in events[3:6])
+    assert events[0].unit_id in last.recorded_unit_ids  # part of a proposed lot, not a confirmed contributor
+    assert result.unresolved == (ScopeFinding("LOT", "lot-02", "LOT_EXPOSURE_UNCONFIRMED"),)
+    assert result.actions == ("RECONCILE_GENEALOGY", "REVIEW_HISTORICAL_CONTAINMENT")
+    assert "PRODUCTION_CHRONOLOGY_UNAVAILABLE" in result.limitations
+    assert result.investigation_issues == signal.issues
+
+
+def test_containment_excludes_baseline_and_previous_cusum_zero_from_contributing_evidence():
+    events = _routine_observations([*BASE_SCORES, 0.9, 0.25, 0.625, 0.875, 1.0])
+    signal = _investigate(events, events[-1])
+    earlier = LotGenealogy("earlier", CONTEXT.part_id, "line-1")
+    observed = LotGenealogy("observed", CONTEXT.part_id, "line-1")
+    units = tuple(UnitGenealogy(e.unit_id, earlier.lot_id if i < 6 else observed.lot_id) for i, e in enumerate(events))
+    result = recommend_containment(signal, ContainmentGenealogy("line-1", (earlier, observed), units))
+    assert tuple(row.inspection_id for row in result.confirmed_observations) == tuple(e.inspection_id for e in events[-2:])
+    assert result.proposed_lots[0].lot_id == observed.lot_id
+    assert result.unresolved == (ScopeFinding("LOT", earlier.lot_id, "LOT_EXPOSURE_UNCONFIRMED"),)
+
+
+def test_containment_requires_independent_exposure_links_for_expansion_and_ongoing_review():
+    signal, events = _containment_signal()
+    record = ExposureEvidence("routing-record-1", "PROCESS_RECORD")
+    ongoing = ExposureEvidence("quality-review-2", "QUALITY_INVESTIGATION")
+    same_line = FourMChange("event-1", "line-1", START, "MACHINE")
+    other_line = replace(same_line, event_id="event-2", line_id="line-2")
+    observed_lot = LotGenealogy("lot-observed", CONTEXT.part_id, "line-1")
+    other_lot = LotGenealogy("lot-unrelated", CONTEXT.part_id, "line-2")
+    genealogy = ContainmentGenealogy(
+        "line-1", (observed_lot, other_lot, replace(observed_lot, lot_id="lot-expanded")),
+        tuple(UnitGenealogy(e.unit_id, observed_lot.lot_id) for e in events[3:-1]),
+        four_m=(other_line, same_line, same_line),
+    )
+    contextual = recommend_containment(signal, genealogy)
+    assert contextual.related_four_m == (same_line,)
+    assert contextual.actions[-1] == "REVIEW_HISTORICAL_CONTAINMENT"
+    assert contextual.excluded == (ScopeFinding("LOT", other_lot.lot_id, "OUTSIDE_CHART_PART_OR_LINE"),)
+    assert contextual.unresolved == (ScopeFinding("LOT", "lot-expanded", "LOT_EXPOSURE_UNCONFIRMED"),)
+    expanded = recommend_containment(signal, replace(
+        genealogy, lot_exposure=(LotExposureLink("lot-expanded", record),) * 2,
+        ongoing_exposure=(OngoingExposureLink(CONTEXT.part_id, "line-2", record),
+                          OngoingExposureLink(CONTEXT.part_id, "line-1", ongoing)),
+    ))
+    added = expanded.proposed_lots[0]
+    assert (added.lot_id, added.basis, added.independent_evidence) == ("lot-expanded", ("INDEPENDENT_EXPOSURE_LINK",), (record,))
+    assert added.recorded_unit_ids == added.supporting_inspection_ids == ()
+    assert expanded.ongoing_evidence == (ongoing,)
+    assert expanded.actions[-1] == "INVESTIGATE_ONGOING_EXPOSURE"
+
+
+def test_containment_preserves_signal_when_genealogy_is_missing_or_conflicting():
+    signal, events = _containment_signal()
+    lot = LotGenealogy("lot-1", CONTEXT.part_id, "line-1")
+    foreign_lot = LotGenealogy("lot-2", "part-2", "line-1")
+    good = LotGenealogy("lot-3", CONTEXT.part_id, "line-1")
+    units = (
+        UnitGenealogy(events[3].unit_id, lot.lot_id), UnitGenealogy(events[3].unit_id, foreign_lot.lot_id),
+        UnitGenealogy(events[4].unit_id, "missing-lot"), UnitGenealogy(events[5].unit_id, foreign_lot.lot_id),
+        UnitGenealogy(events[6].unit_id, good.lot_id),
+    )
+    genealogy = ContainmentGenealogy("line-1", (lot, foreign_lot, replace(lot, part_id=None), good), units)
+    result = recommend_containment(signal, genealogy)
+    assert result == recommend_containment(signal, replace(genealogy, lots=genealogy.lots[::-1], units=units[::-1]))
+    assert [x.lot_id for x in result.proposed_lots] == [good.lot_id]
+    assert result.excluded == ()
+    assert result.unresolved == (
+        ScopeFinding("UNIT", events[3].unit_id, "UNIT_LOT_CONFLICT", (lot.lot_id, foreign_lot.lot_id)),
+        ScopeFinding("UNIT", events[7].unit_id, "UNIT_LOT_UNKNOWN"),
+        ScopeFinding("LOT", lot.lot_id, "LOT_GENEALOGY_CONFLICT"),
+        ScopeFinding("LOT", foreign_lot.lot_id, "LOT_EVIDENCE_CONTEXT_CONFLICT"),
+        ScopeFinding("LOT", "missing-lot", "LOT_NOT_IN_ROSTER"),
+    )
+    unnamed_line = recommend_containment(signal, replace(genealogy, line_id=None))
+    assert unnamed_line.status == "SCOPE_UNRESOLVED"
+    assert "STATION_LINE_MAPPING_UNKNOWN" in unnamed_line.limitations
+    assert unnamed_line.confirmed_observations == result.confirmed_observations
+    empty = recommend_containment(signal, ContainmentGenealogy("line-1"))
+    assert empty.status == "SCOPE_UNRESOLVED"
+    assert empty.actions == ("RECONCILE_GENEALOGY",)
+
+
+@pytest.mark.parametrize(("scores", "status"), [
+    ([0.5, 0.5], "INSUFFICIENT_EVIDENCE"),
+    ([0.5, 0.5, 0.5, 0.9], "INSUFFICIENT_EVIDENCE"),
+    ([*BASE_SCORES, 0.5], "NO_SIGNAL"),
+])
+def test_containment_absence_of_a_qualified_signal_never_recommends_scope(scores, status):
+    events = _routine_observations(scores)
+    ongoing = OngoingExposureLink(CONTEXT.part_id, "line-1", ExposureEvidence("record-1", "PROCESS_RECORD"))
+    result = recommend_containment(_investigate(events, events[-1]), ContainmentGenealogy("line-1", ongoing_exposure=(ongoing,)))
+    assert result.status == status
+    assert result.confirmed_observations == result.proposed_lots == result.actions == result.excluded == ()
+
+
+def test_containment_blank_line_is_invalid_rather_than_a_scope_match():
+    signal, _ = _containment_signal()
+    evidence = ExposureEvidence("record-1", "PROCESS_RECORD")
+    genealogy = ContainmentGenealogy(
+        "", (LotGenealogy("lot-1", CONTEXT.part_id, ""),), lot_exposure=(LotExposureLink("lot-1", evidence),),
+    )
+    with pytest.raises(errors.ApiError, match="nonempty IDs"):
+        recommend_containment(signal, genealogy)
+
+
+def test_containment_rejects_conflicting_or_context_only_corroboration():
+    signal, _ = _containment_signal()
+    evidence = ExposureEvidence("record-1", "PROCESS_RECORD")
+    genealogy = ContainmentGenealogy(
+        "line-1", (LotGenealogy("lot-1", CONTEXT.part_id, "line-1"),),
+        lot_exposure=(LotExposureLink("lot-1", evidence),),
+        ongoing_exposure=(OngoingExposureLink(CONTEXT.part_id, "line-1", replace(evidence, basis="QUALITY_INVESTIGATION")),),
+    )
+    with pytest.raises(errors.ApiError, match="conflicting evidence bases"):
+        recommend_containment(signal, genealogy)
+    context_only = replace(genealogy, ongoing_exposure=(), four_m=(FourMChange("record-1", "line-1", START, "METHOD"),))
+    with pytest.raises(errors.ApiError, match="cannot corroborate exposure"):
+        recommend_containment(signal, context_only)
 
 
 def _client(persistence, principal=None):

@@ -57,4 +57,10 @@ Short entries. Newest at the bottom. Format: decision — why — tradeoff.
     - **Expiry:** taken from the signed snapshot payload, which must agree with the stored row.
 
     — Tradeoff: tests and repair scripts can no longer patch these rows. Corrections are new records.
+33. **SPC containment is recommended by evidence and decided by people.** Astra's pure `investigate()` and `recommend_containment()` (#31, #35) receive what Opus reads through two ports: the committed inspection prefix, and a bounded genealogy of lots, units and the line's 4M changes. No exposure links are asserted, because none are recorded as independent evidence.
+    - **Storage:** the investigation, the recommendation and what was read are stored verbatim with their versions. A trigger makes this evidence immutable and the decision final.
+    - **Decision:** only a Quality Manager can approve, only lots the recommendation proposed, and only when it says REVIEW_RECOMMENDED. Each approved lot is then quarantined by its own recall, through the usual audited path.
+    - **Honesty:** synthetic, uncalibrated and re-inspected data never qualifies, so the demo's drift honestly reads "insufficient evidence".
+
+    — Tradeoff: unsampled same-line lots stay unresolved instead of being held "just in case".
 

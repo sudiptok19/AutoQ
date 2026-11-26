@@ -12,9 +12,13 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
+from typing import TYPE_CHECKING
 
 from app.core.auth import Principal
 from app.core.errors import ApiError
+
+if TYPE_CHECKING:   # type-only: Astra's SPC DTOs stay feature-local (no import cycle, no runtime dependency)
+    from app.features.spc.service import ContainmentGenealogy, Investigation, InvestigationContext, InvestigationEvent
 
 # ── inputs Opus hands to Astra's pure functions ─────────────────────────────
 
@@ -127,6 +131,10 @@ class Ports(Protocol):
     def record_recheck(self, db: Session, ctx: SealContext, evidence: Any, probe: bytes, probe_media_type: str, evidence_source: str, principal: Principal) -> dict: ...
     # spc
     def load_spc_inputs(self, db: Session, part_id: str, line_id: str, method_version: str, principal: Principal) -> tuple[list[SpcPoint], SpcBaseline | None, SpcRule, list[dict]]: ...
+    # A3 containment review (agreed with Astra on PR #35): Opus reads the immutable inspection prefix and a bounded
+    # genealogy; Astra's pure investigate()/recommend_containment() decide nothing about storage or approval.
+    def load_spc_investigation_inputs(self, db: Session, target_inspection_id: str, principal: Principal) -> tuple[InvestigationContext, list[InvestigationEvent], SpcRule]: ...
+    def load_spc_containment_genealogy(self, db: Session, investigation: Investigation, principal: Principal) -> ContainmentGenealogy: ...
     # reports
     def load_snapshot(self, db: Session, report_id: str, principal: Principal) -> ReportSnapshot: ...
     def record_pdf(self, db: Session, snapshot: ReportSnapshot, pdf: bytes, principal: Principal) -> str: ...
