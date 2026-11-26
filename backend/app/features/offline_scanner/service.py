@@ -34,7 +34,7 @@ was deleted before the first sync.
 """
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core import audit
@@ -56,6 +56,17 @@ from app.policy import eligibility, policies
 GENESIS = "0" * 64
 LOCAL = {"PROVISIONAL_ACCEPT", "LOCAL_BLOCK", "ONLINE"}
 CLOCK_SKEW = timedelta(minutes=2)   # phone clocks drift; tolerated at the window edges, never more
+SUPPORTED_CHAIN_VERSIONS = (1, 2)   # dual reader: every supported version verifies, whatever writers are enabled
+
+
+def _now() -> datetime:
+    """Authoritative server receipt time (one seam, so tests can move the clock instead of editing signed records)."""
+    return datetime.now(UTC)
+
+
+def _chain_policy(db: Session) -> dict:
+    o = policies.settings_of(policies.active(db)).offline
+    return {"writer_version": o.chain_writer_version, "min_version": o.chain_min_version, "supported": list(SUPPORTED_CHAIN_VERSIONS)}
 
 
 def _iso(dt):
@@ -97,7 +108,7 @@ def _package_blocked(db: Session, pkg: m.Package) -> bool:
 def snapshot_view(db: Session, sn: m.OfflineSnapshot) -> dict:
     dev = db.get(m.Device, sn.device_id)
     return {"snapshot_id": sn.id, "device_id": sn.device_id, "operator": db.get(m.User, sn.operator_id).username, "shipment_id": sn.shipment_id,
-            "issued_at": _iso(sn.issued_at), "expires_at": _iso(sn.expires_at), "expired": sn.expires_at <= datetime.now(UTC),
+            "issued_at": _iso(sn.issued_at), "expires_at": _iso(sn.expires_at), "expired": sn.expires_at <= _now(),
             "device_seq": dev.last_seq if dev else None, "settlement": sn.settlement, "settled_at": _iso(sn.settled_at),
             "settled_by": db.get(m.User, sn.settled_by).username if sn.settled_by else None, "settlement_reason": sn.settlement_reason,
             "settled_seq": sn.settled_seq, "settled_head": sn.settled_head, "recovery_requested_at": _iso(sn.recovery_requested_at),
@@ -165,7 +176,8 @@ def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, lo
     audit.append(db, p.username, "OFFLINE_SNAPSHOT_ISSUED", "shipment", s.id, data={"snapshot": sid, "device": dev.id, "allowed": len(allowed), "held": len(held),
                                                                                     "expected_units": remaining, "ttl_s": ttl, "superseded": superseded})
     return {"token": token, "snapshot_id": sid, "expires_at": _iso(now + timedelta(seconds=ttl)), "superseded": superseded,
-            "device": {"id": dev.id, "last_seq": dev.last_seq, "head": dev.head_hash}}
+            "device": {"id": dev.id, "last_seq": dev.last_seq, "head": dev.head_hash, "chain_version_high": dev.chain_version_high},
+            "chain": _chain_policy(db)}
 
 
 def settle(db: Session, p: Principal, snapshot_id: str, device_id: str, local_seq: int, local_head: str, pending: int) -> dict:
@@ -285,7 +297,9 @@ def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, eve
         if e.get("local_decision") not in LOCAL:
             raise ApiError(422, "VALIDATION", f"local_decision must be one of {sorted(LOCAL)}")
         parse_capture_time(e["scanned_at"])
-        e["snapshot_id"] = e.get("snapshot_id") or snapshot_id            # the claim this event is judged (and replayed) by
+        if e.get("chain_version", 1) == 1:
+            e["snapshot_id"] = e.get("snapshot_id") or snapshot_id        # v1: the claim may come from the batch default
+        # v2: the snapshot id is inside the hash; the event's own value (null for ONLINE) is the claim, never a default
     if snapshot_id:
         snap = db.get(m.OfflineSnapshot, snapshot_id)
         if not snap or snap.device_id != dev.id:
@@ -303,7 +317,10 @@ def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, eve
             raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} differs from the version already synced", {"seq": e["seq"]})
         # A recorded claim (including a known "no snapshot") must be repeated exactly. Pre-0006 rows have no reliable
         # claim metadata: only a non-null legacy value can be compared.
-        if (prior.claim_recorded or prior.claimed_snapshot_id is not None) and e["snapshot_id"] != prior.claimed_snapshot_id:
+        if e.get("chain_version", 1) != prior.chain_version:
+            raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} was synced as chain v{prior.chain_version}",
+                           {"seq": e["seq"], "field": "chain_version", "original": prior.chain_version})
+        if (prior.claim_recorded or prior.claimed_snapshot_id is not None) and e.get("snapshot_id") != prior.claimed_snapshot_id:
             raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} now cites a different snapshot than when it was synced",
                            {"seq": e["seq"], "field": "snapshot_id", "original": prior.claimed_snapshot_id})
         results.append(_replay_result(db, prior, e))
@@ -311,41 +328,57 @@ def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, eve
         audit.append(db, p.username, "DEVICE_CHAIN_BROKEN", "device", dev.id, f"Chain broken at seq {broken}", data={"head_seq": dev.last_seq})
         raise_alert(db, type="OFFLINE_CHAIN_BROKEN", severity="HIGH", entity_type="DEVICE", entity_id=dev.id, reason_codes=["CHAIN_BROKEN"],
                     details={"broken_at": broken, "server_seq": dev.last_seq}, dedupe_key=f"chain:{dev.id}:{dev.last_seq}:{broken}")
-        return {"results": [], "chain": {"ok": False, "broken_at": broken, "server_head": dev.head_hash, "server_seq": dev.last_seq}}
+        return {"results": [], "chain": {"ok": False, "broken_at": broken, "server_head": dev.head_hash, "server_seq": dev.last_seq, **_chain_policy(db)}}
     db.commit()  # release the device row; each new event commits in its own transaction below
     for e in new:
         results.append(_apply(p, dev.id, e))
     with session_factory()() as s2:
         d = s2.get(m.Device, dev.id)
-        return {"results": results, "chain": {"ok": True, "server_head": d.head_hash, "server_seq": d.last_seq}}
+        return {"results": results, "chain": {"ok": True, "server_head": d.head_hash, "server_seq": d.last_seq,
+                                              "chain_version_high": d.chain_version_high, **_chain_policy(s2)}}
 
 
 def _snapshot_reasons(db: Session, p: Principal, device_id: str, snap: m.OfflineSnapshot | None, claim: str | None,
-                      shipment_id: str, scanned_at: datetime) -> list[dict]:
-    """Why a provisional load was not authorized by a valid snapshot of its own. Empty list = provenance holds."""
+                      shipment_id: str, scanned_at: datetime) -> tuple[list[dict], dict | None]:
+    """(why a provisional load was not authorized by a valid snapshot of its own, the verified signed payload).
+    The SIGNED payload is the authority: its device, operator and shipment binding, its allowlist and held list,
+    and its expiry. The database row must agree with it."""
     if not claim:
-        return [{"code": "SNAPSHOT_REQUIRED", "message": "Provisional load names no offline snapshot"}]
+        return [{"code": "SNAPSHOT_REQUIRED", "message": "Provisional load names no offline snapshot"}], None
     if not snap or snap.device_id != device_id or snap.operator_id != p.id or snap.shipment_id != shipment_id:
-        return [{"code": "SNAPSHOT_SCOPE_MISMATCH", "message": "Snapshot was not issued to this device, operator and shipment"}]
+        return [{"code": "SNAPSHOT_SCOPE_MISMATCH", "message": "Snapshot was not issued to this device, operator and shipment"}], None
+    try:
+        signed = verify(snap.token, trusted_keys(db), "SNAP", int(snap.issued_at.timestamp())).payload
+    except CryptoError as ce:
+        return [{"code": "SNAPSHOT_SIGNATURE_INVALID", "message": f"Snapshot no longer verifies: {ce.code}"}], None
+    if (signed.get("id"), signed.get("device_id"), signed.get("operator_id"), signed.get("shipment")) != (snap.id, device_id, p.id, shipment_id) \
+            or int(signed.get("exp", 0)) != int(snap.expires_at.timestamp()):
+        return [{"code": "SNAPSHOT_RECORD_MISMATCH", "message": "The stored snapshot record disagrees with its signed payload"}], None
     # Authority is judged at RECEIPT. Settlement attested an empty queue at a chain head, and recovery ended the
     # device's authority: an event arriving afterwards was not part of that history, whatever capture time it claims.
+    now = _now()
     if snap.recovery_requested_at or snap.settlement == "RECOVERED":
-        return [{"code": "SNAPSHOT_RECOVERED", "message": "This device was declared lost; its captures need physical verification"}]
+        return [{"code": "SNAPSHOT_RECOVERED", "message": "This device was declared lost; its captures need physical verification"}], signed
     if snap.settled_at:
         return [{"code": "SNAPSHOT_SETTLED", "message": f"Received after the offline session was settled ({snap.settlement}, seq {snap.settled_seq}); "
-                                                       "reconcile physically"}]
-    if datetime.now(UTC) >= snap.expires_at:
-        return [{"code": "SNAPSHOT_EXPIRED_AT_RECEIPT", "message": "Received after the snapshot expired; a claimed capture time cannot grant load authority"}]
-    if scanned_at > datetime.now(UTC) + CLOCK_SKEW:
-        return [{"code": "CAPTURE_TIME_INVALID", "message": "Capture time is in the future"}]
+                                                       "reconcile physically"}], signed
+    if now.timestamp() >= int(signed["exp"]):
+        return [{"code": "SNAPSHOT_EXPIRED_AT_RECEIPT", "message": "Received after the snapshot's signed expiry; a claimed capture time cannot grant load authority"}], signed
+    if scanned_at > now + CLOCK_SKEW:
+        return [{"code": "CAPTURE_TIME_INVALID", "message": "Capture time is in the future"}], signed
     if scanned_at < snap.issued_at - CLOCK_SKEW:
-        return [{"code": "CAPTURE_BEFORE_SNAPSHOT", "message": "Captured before the snapshot was issued"}]
+        return [{"code": "CAPTURE_BEFORE_SNAPSHOT", "message": "Captured before the snapshot was issued"}], signed
+    return [], signed
+
+
+def _version_reasons(dev: m.Device, version: int, floor: int) -> list[dict]:
+    """A recorded event below the floor, or below what this device already wrote (an outdated tab sharing its queue),
+    is kept for reconciliation but never confers load authority."""
+    if version < floor:
+        return [{"code": "CHAIN_VERSION_BELOW_FLOOR", "message": f"Captured by a v{version} writer; the plant requires v{floor} — update the scanner"}]
+    if version < dev.chain_version_high:
+        return [{"code": "CHAIN_VERSION_REGRESSION", "message": f"v{version} event after this device already wrote v{dev.chain_version_high} (outdated tab?)"}]
     return []
-
-
-def _signed_scope(db: Session, snap: m.OfflineSnapshot) -> dict:
-    """The allowlist and held list exactly as signed into the snapshot (verified as of its own issue time)."""
-    return verify(snap.token, trusted_keys(db), "SNAP", int(snap.issued_at.timestamp())).payload
 
 
 def _allowlist_reasons(scope: dict, pkg: m.Package | None) -> list[dict]:
@@ -381,6 +414,10 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
         dev = db.scalars(select(m.Device).where(m.Device.id == device_id).with_for_update().execution_options(populate_existing=True)).one()   # device row first
         if dev.last_seq != e["seq"] - 1 or dev.head_hash != e["prev_hash"]:
             raise ApiError(409, "SYNC_RACE", "Another sync advanced this device concurrently; resend from the server head")
+        # Read the version floor under the policy lock (shared): a floor change waits for this decision, never splits it.
+        db.execute(text("SELECT pg_advisory_xact_lock_shared(:k)"), {"k": policies.POLICY_LOCK})
+        version = e.get("chain_version", 1)
+        below_floor = _version_reasons(dev, version, policies.settings_of(policies.active(db)).offline.chain_min_version)
         scanned_at = parse_capture_time(e["scanned_at"])
         claim = e.get("snapshot_id")
         snap = db.get(m.OfflineSnapshot, claim) if claim else None
@@ -402,13 +439,8 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
             view, _ = dispatch.scan(db, p, e["shipment_id"], e["token"], e["client_event_id"], device_id, offline=True, captured_at=scanned_at, commit_load=False)
             outcome, note = "BLOCKED", "Blocked on device — recorded, not loaded"
         else:
-            untrusted = _snapshot_reasons(db, p, device_id, snap, claim, ship.id if ship else e["shipment_id"], scanned_at)
-            scope = None
-            if not untrusted:
-                try:
-                    scope = _signed_scope(db, snap)
-                except CryptoError as ce:
-                    untrusted = [{"code": "SNAPSHOT_SIGNATURE_INVALID", "message": f"Snapshot no longer verifies: {ce.code}"}]
+            untrusted, scope = _snapshot_reasons(db, p, device_id, snap, claim, ship.id if ship else e["shipment_id"], scanned_at)
+            untrusted = below_floor + untrusted
             view, _ = dispatch.scan(db, p, e["shipment_id"], e["token"], e["client_event_id"], device_id, offline=True, captured_at=scanned_at,
                                     authorize=lambda pkg: untrusted or _allowlist_reasons(scope, pkg))
             if view["decision"] == "ACCEPTED":
@@ -425,11 +457,13 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
                             dedupe_key=f"offline-conflict:{e['client_event_id']}", audible=True)
         valid_assoc = snap is not None and snap.device_id == device_id and snap.operator_id == p.id
         db.add(m.DeviceEvent(device_id=device_id, seq=e["seq"], client_event_id=e["client_event_id"], prev_hash=e["prev_hash"], hash=e["hash"],
-                             snapshot_id=snap.id if valid_assoc else None, claimed_snapshot_id=claim, claim_recorded=True, scan_id=view["scan_id"] if view else None,
+                             snapshot_id=snap.id if valid_assoc else None, claimed_snapshot_id=claim, claim_recorded=True, chain_version=version, scan_id=view["scan_id"] if view else None,
                              local_decision=ld, outcome=outcome, scanned_at=scanned_at, operator_id=p.id))
         dev.last_seq, dev.head_hash = e["seq"], e["hash"]
+        dev.chain_version_high = max(dev.chain_version_high, version)
         db.commit()
-        out = {"client_event_id": e["client_event_id"], "seq": e["seq"], "outcome": outcome, "scan": view, "note": note, "segregation_task_id": task}
+        out = {"client_event_id": e["client_event_id"], "seq": e["seq"], "outcome": outcome, "scan": view, "note": note, "segregation_task_id": task,
+               "chain_version": version}
         if original:
             out["original_outcome"] = original
         return out

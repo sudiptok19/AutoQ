@@ -1,7 +1,7 @@
 """Versioned, explainable policy. Every consequential row records the version it was decided under.
 Numbers here are DEMONSTRATION defaults (provisional, not OEM policy) until calibrated on held-out data."""
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import text, select, update
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
@@ -36,14 +36,32 @@ class Containment(BaseModel):
     threshold_tightening: float = Field(0.0, ge=0, lt=1)   # only applied with a calibrated profile
 
 
+class Offline(BaseModel):
+    """Device-chain versions. Readers accept every supported version; these two knobs roll writers forward safely.
+    chain_writer_version: what scanners should write next (raise only after every reader understands it).
+    chain_min_version: the floor. A newer event below it is recorded for reconciliation but never gets load authority."""
+    chain_writer_version: int = Field(1, ge=1, le=2)
+    chain_min_version: int = Field(1, ge=1, le=2)
+
+    @model_validator(mode="after")
+    def _floor_not_above_writer(self):
+        if self.chain_min_version > self.chain_writer_version:
+            raise ValueError("chain_min_version cannot exceed chain_writer_version")
+        return self
+
+
 class PolicySettings(BaseModel):
     sampling: Sampling = Sampling()
     inspection: Inspection = Inspection()
     containment: Containment = Containment()
     seal_recheck_max_age_minutes: int = Field(60, ge=1, le=24 * 60)
     snapshot_ttl_minutes: int = Field(240, ge=5, le=24 * 60)
+    offline: Offline = Field(default_factory=Offline)
     allow_partial_close: bool = False
     retention_years_provisional: int = Field(11, ge=1, le=50)
+
+
+POLICY_LOCK = 7_316_401   # pg advisory key shared by policy publishing (exclusive) and offline replay (shared)
 
 
 def active(db: Session) -> m.Policy:
@@ -62,7 +80,9 @@ def view(p: m.Policy) -> dict:
 
 
 def publish(db: Session, settings: PolicySettings, actor_id: str | None, *, version: str | None = None, demo_default: bool = False) -> m.Policy:
-    """Activate a new immutable version; older versions stay for provenance."""
+    """Activate a new immutable version; older versions stay for provenance. Takes the policy advisory lock exclusively:
+    offline replay holds it shared while judging an event, so a floor change never lands mid-decision."""
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": POLICY_LOCK})
     n = len(db.scalars(select(m.Policy.id)).all()) + 1
     ver = version or f"p{n}"
     if db.scalars(select(m.Policy).where(m.Policy.version == ver)).first():

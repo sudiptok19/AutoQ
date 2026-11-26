@@ -11,12 +11,24 @@ async function dock(page: Page) {
 }
 
 test('offline loads reconcile on a mounted scanner: acceptance, conflict, verification, settlement, close', async ({ browser }) => {
+  // The plant enables chain-v2 writers (readers already accept both): an admin publishes the policy switch.
+  const admin = await (await browser.newContext()).newPage()
+  await signIn(admin, 'admin', '/')
+  const published = await admin.evaluate(async () => {
+    const h = { Authorization: `Bearer ${localStorage.getItem('autoq-token')}`, 'Content-Type': 'application/json' }
+    const cur = await (await fetch('/api/v1/policies', { headers: h })).json()
+    const body = { ...cur.settings, offline: { chain_writer_version: 2, chain_min_version: 1 }, version: 'e2e-chain-v2' }
+    return (await fetch('/api/v1/policies', { method: 'PUT', headers: h, body: JSON.stringify(body) })).status
+  })
+  expect(published).toBe(200)
+
   const phone = await (await browser.newContext({ viewport: { width: 412, height: 915 } })).newPage()
   await signIn(phone, 'disp.kiran', '/scanner')
   await phone.getByRole('button', { name: 'Setup' }).click()
   await phone.getByRole('button', { name: new RegExp(SHIP) }).click()
   await phone.getByRole('button', { name: /Download signed snapshot/ }).click()
   await expect(phone.getByText(/Snapshot verified \(kid aq-e2e-1\)/)).toBeVisible()      // the suite's own signing key
+  await expect(phone.getByText('v2', { exact: true })).toBeVisible()                     // the phone adopted the v2 writer
   await phone.getByRole('checkbox').check()                                              // the dock loses signal
 
   await phone.getByRole('button', { name: 'Scan', exact: true }).click()

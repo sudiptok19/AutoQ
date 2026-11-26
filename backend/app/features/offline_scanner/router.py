@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, Query
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,9 @@ class EventIn(BaseModel):
     local_decision: str
     local_reasons: list[dict] = Field(default_factory=list)
     snapshot_id: str | None = Field(None, max_length=40)   # the snapshot this decision was made under (overrides the batch default)
+    # Device-chain version this event was hashed under (absent = 1). v2 binds chain_version and snapshot_id into the
+    # hash (snapshot_id: exact capture snapshot for offline decisions, explicit null for ONLINE). Readers accept both.
+    chain_version: Literal[1, 2] = 1
 
     @field_validator("scanned_at")
     @classmethod
