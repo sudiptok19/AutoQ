@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import 'fake-indexeddb/auto'
-import { decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload } from './offline'
+import { decideLocally, reconciledStatus, reflectedIn, snapshotFor, type QueuedScan, type SnapPayload } from './offline'
 import { newKeyPair, signToken } from '../lib/token'
 import { chainHash, GENESIS, verifyChain } from '../lib/chain'
 import { appendScan, listQueue, updateScan } from './store'
@@ -69,5 +69,26 @@ describe('sync provenance and reconciliation (A7 handoff)', () => {
     expect(reconciledStatus({ local_decision: 'ONLINE', status: 'ACCEPTED' }, { client_event_id: 'e', outcome: 'DUPLICATE' })).toBe('ACCEPTED')
     expect(reconciledStatus({ local_decision: 'PROVISIONAL_ACCEPT', status: 'PENDING' }, { client_event_id: 'e', outcome: 'DUPLICATE', original_outcome: 'ACCEPTED' })).toBe('ACCEPTED')
     expect(reconciledStatus({ local_decision: 'LOCAL_BLOCK', status: 'PENDING' }, { client_event_id: 'e', outcome: 'BLOCKED' })).toBe('BLOCKED')
+  })
+})
+
+describe('capacity after a refreshed snapshot (P1)', () => {
+  const T = (s: string) => Date.parse(s)
+  it('does not count loads the server had already committed when the snapshot was downloaded', async () => {
+    const { pkg, snap } = await fixture()
+    // Snapshot downloaded at 10:05 says 8 units remain of 16. pkg_a was synced at 10:01, so it is already in that 8.
+    const synced = q({ package_id: 'pkg_a', status: 'ACCEPTED', scanned_at: '2026-11-26T10:00:00Z', synced_at: '2026-11-26T10:01:00Z' })
+    const refreshed = { ...snap, expected_units: 8 }
+    const before = await decideLocally(await pkg('pkg_b'), refreshed, [synced], 1500)                                   // old behaviour
+    const after = await decideLocally(await pkg('pkg_b'), refreshed, [synced], 1500, T('2026-11-26T10:05:00Z'))
+    expect(before.reasons.map(r => r.code)).toContain('ORDER_QTY_EXCEEDED')
+    expect(after.decision).toBe('PROVISIONAL_ACCEPT')
+  })
+  it('still counts what the snapshot cannot know about: unsynced, or synced after it was downloaded', () => {
+    const dl = T('2026-11-26T10:05:00Z')
+    expect(reflectedIn(q({ status: 'PENDING', scanned_at: '2026-11-26T10:00:00Z' }), dl)).toBe(false)
+    expect(reflectedIn(q({ status: 'ACCEPTED', scanned_at: '2026-11-26T10:00:00Z', synced_at: '2026-11-26T10:06:00Z' }), dl)).toBe(false)
+    expect(reflectedIn(q({ local_decision: 'ONLINE', status: 'ACCEPTED', scanned_at: '2026-11-26T10:04:00Z' }), dl)).toBe(true)
+    expect(reflectedIn(q({ local_decision: 'ONLINE', status: 'PENDING', scanned_at: '2026-11-26T10:04:00Z' }), dl)).toBe(false)   // lost response: unknown
   })
 })

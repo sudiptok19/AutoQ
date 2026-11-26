@@ -48,34 +48,53 @@ def view(db: Session, t: m.SegregationTask) -> dict:
 
 
 def complete(db: Session, p: Principal, task_id: str, reason: str) -> dict:
+    """Record the physical action, without ever deleting a load that some other legitimate scan created.
+
+    REMOVAL_REQUIRED (recall / departure re-validation): the recorded load IS the problem, so completing it unloads —
+    but only a load on the shipment the task names.
+    SEGREGATION_REQUIRED (an offline load the server refused): that event never created a load, so any active load on
+    the package belongs to a different, accepted scan (same truck or another). It is never removed here.
+    Either way, a package recorded as loaded where the task does not expect it is a conflicting physical location:
+    a Quality Engineer/Manager must verify where the crate really is and record the resolution; the load is unchanged."""
     t0 = db.get(m.SegregationTask, task_id)
     if not t0:
         raise ApiError(404, "TASK_NOT_FOUND", "Segregation task not found")
     locks = lock_set(db)
+    pkg = None
     if t0.package_id:
         locks.lock(m.Unit, list(db.scalars(select(m.PackageItem.unit_id).where(m.PackageItem.package_id == t0.package_id, m.PackageItem.removed_at.is_(None)))))
         [pkg] = locks.lock(m.Package, [t0.package_id])
-    else:
-        pkg = None
-    if t0.shipment_id:
-        locks.lock(m.Shipment, [t0.shipment_id])
+    # With the package locked no load can appear or move; lock every shipment involved, in id order.
+    load = db.scalars(select(m.Load).where(m.Load.package_id == pkg.id, m.Load.removed_at.is_(None))).first() if pkg else None
+    locks.lock(m.Shipment, [x for x in {t0.shipment_id, load.shipment_id if load else None} if x])
     t = db.scalars(select(m.SegregationTask).where(m.SegregationTask.id == task_id).with_for_update()).one()
     if t.status != "OPEN":
         raise ApiError(409, "TASK_COMPLETED", "Task already completed")
     now = datetime.now(UTC)
-    unloaded = False
-    if t.type in ("REMOVAL_REQUIRED", "SEGREGATION_REQUIRED") and pkg is not None:
-        load = db.scalars(select(m.Load).where(m.Load.package_id == pkg.id, m.Load.removed_at.is_(None))).first()
-        if load:
+    unloaded, elsewhere = False, None
+    if t.type in ("REMOVAL_REQUIRED", "SEGREGATION_REQUIRED") and load is not None:
+        if t.type == "REMOVAL_REQUIRED" and (t.shipment_id is None or load.shipment_id == t.shipment_id):
             ship = db.get(m.Shipment, load.shipment_id)
             if ship.status in ("IN_TRANSIT", "DELIVERED"):
                 raise ApiError(409, "PACKAGE_DEPARTED", "Package already departed; use an in-transit recall task")
             load.removed_at, load.removed_reason = now, f"{t.type}: {reason}"
             pkg.state = "SEALED"
             unloaded = True
+        else:
+            elsewhere = db.get(m.Shipment, load.shipment_id)
+            if not p.has("quality_engineer", "quality_manager"):
+                raise ApiError(409, "LOCATION_CONFLICT_REVIEW", f"{pkg.label} is recorded as loaded on {elsewhere.code} by another accepted scan. "
+                               "A quality engineer must verify where the crate physically is; that load is not changed by this task.",
+                               {"package": pkg.label, "recorded_on": elsewhere.code, "task_shipment_id": t.shipment_id})
     t.status, t.completed_by, t.completed_at, t.completion_reason = "COMPLETED", p.id, now, reason
     db.flush()
-    audit.append(db, p.username, "SEGREGATION_TASK_COMPLETED", "segregation_task", t.id, reason, data={"type": t.type, "unloaded": unloaded})
+    data = {"type": t.type, "unloaded": unloaded}
+    if elsewhere:
+        data |= {"location_conflict": True, "recorded_on": elsewhere.code, "load_left_unchanged": True}
+    audit.append(db, p.username, "SEGREGATION_LOCATION_CONFLICT_RESOLVED" if elsewhere else "SEGREGATION_TASK_COMPLETED", "segregation_task", t.id, reason, data=data)
     if unloaded:
         outbox.emit(db, "DISPATCH_STATE_CHANGED", "PACKAGE", pkg.id, severity="MEDIUM", reason_codes=[t.type], payload={"state": pkg.state, "unloaded": True})
-    return view(db, t)
+    out = view(db, t)
+    if elsewhere:
+        out["location_conflict"] = {"recorded_on": elsewhere.code, "load_left_unchanged": True}
+    return out

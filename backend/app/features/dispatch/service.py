@@ -7,6 +7,7 @@ unit → package → order → shipment, so concurrent loaders of one package se
 (plus a partial unique index on active loads as a database backstop).
 """
 import hashlib
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text
@@ -82,10 +83,36 @@ def shipment_view(db: Session, s: m.Shipment, *, scans: bool = True) -> dict:
            "loaded_package_ids": [ld.package_id for ld in loads], "loaded_units": sum(ld.unit_count for ld in loads), "expected_units": expected_units(db, s),
            "movements": [{"type": mv.type, "location": mv.location, "occurred_at": _iso(mv.occurred_at), "recorded_at": _iso(mv.recorded_at)} for mv in moves],
            "closed_at": _iso(s.closed_at), "created_at": _iso(s.created_at)}
-    from app.features.offline_scanner.service import pending_for_shipment
-    out["offline_devices_not_synced"] = pending_for_shipment(db, s.id)  # close refuses while this is non-empty
+    from app.features.offline_scanner.service import outstanding_for_shipment
+    out["offline_authorizations_open"] = outstanding_for_shipment(db, s.id)   # close and departure refuse while non-empty
+    out["open_physical_tasks"] = [segregation.view(db, t) for t in open_physical_tasks(db, s.id)]
     if scans:
         out["scans"] = [scan_view(db, x) for x in db.scalars(select(m.Scan).where(m.Scan.shipment_id == s.id).order_by(m.Scan.decided_at.desc()).limit(200))]
+    return out
+
+
+def open_physical_tasks(db: Session, shipment_id: str) -> list[m.SegregationTask]:
+    """Unload/segregate orders still open against this shipment, including crates that never made it onto the manifest
+    (an offline-staged load the server refused). The truck may not leave until each has a recorded disposition."""
+    return list(db.scalars(select(m.SegregationTask).where(m.SegregationTask.shipment_id == shipment_id, m.SegregationTask.status == "OPEN",
+                                                           m.SegregationTask.type.in_(("REMOVAL_REQUIRED", "SEGREGATION_REQUIRED")))
+                           .order_by(m.SegregationTask.created_at)))
+
+
+def _reconciliation_blockers(db: Session, s: m.Shipment) -> list[dict]:
+    """What still stands between this shipment and the road, beyond the gate itself. Caller holds the shipment lock,
+    which snapshot issuance and settlement also take, so the answer cannot change underneath it."""
+    from app.features.offline_scanner.service import outstanding_for_shipment
+    out = []
+    for o in outstanding_for_shipment(db, s.id):
+        out.append({"code": "SNAPSHOT_UNSETTLED", "device_id": o["device_id"], "snapshot_id": o["snapshot_id"],
+                    "message": f"Device {o['device_id']} ({o['operator']}) holds an offline authorization issued {o['issued_at']}"
+                               f"{' (expired, but its captures may still be on the phone)' if o['expired'] else ''} — end the offline session "
+                               "on the device, or a Quality Manager must recover it"})
+    for t in open_physical_tasks(db, s.id):
+        pkg = db.get(m.Package, t.package_id) if t.package_id else None
+        out.append({"code": "PHYSICAL_TASK_OPEN", "task_id": t.id, "package_id": t.package_id,
+                    "message": f"{t.type.replace('_', ' ').lower()} {pkg.label if pkg else '(unidentified crate)'} is still open — record what was done first"})
     return out
 
 
@@ -224,8 +251,11 @@ def evaluate(db: Session, locks: LockSet, s0: m.Shipment, token: str, now: datet
 
 
 def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_id: str, device_id: str | None, *, offline: bool = False,
-         captured_at: datetime | None = None, commit_load: bool = True) -> tuple[dict, bool]:
-    """Returns (scan view, created). Idempotent on client_event_id."""
+         captured_at: datetime | None = None, commit_load: bool = True,
+         authorize: Callable[[m.Package | None], list[dict]] | None = None) -> tuple[dict, bool]:
+    """Returns (scan view, created). Idempotent on client_event_id.
+    `authorize` (offline replay) adds reasons from the capture's own authority — e.g. the signed snapshot's allowlist —
+    evaluated against the package the gate resolved from the verified token. Any reason blocks the load."""
     s0 = find_shipment(db, shipment_key)
     content = content_sha(s0.id, token)
     prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == client_event_id)).first()
@@ -236,9 +266,11 @@ def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_
     now = datetime.now(UTC)
     locks = lock_set(db)
     g, pkg, units, s = evaluate(db, locks, s0, token, now)
-    accepted = not g.reasons and commit_load
+    extra = authorize(pkg) if authorize else []
+    reasons = g.reasons + extra
+    accepted = not reasons and commit_load
     sc = m.Scan(id=new_id("scan"), shipment_id=s.id, package_id=pkg.id if pkg else None, client_event_id=client_event_id, content_sha256=content,
-                device_id=device_id, decision="ACCEPTED" if accepted else "BLOCKED", reasons=g.reasons if g.reasons or commit_load else
+                device_id=device_id, decision="ACCEPTED" if accepted else "BLOCKED", reasons=reasons if reasons or commit_load else
                 [{"code": "BLOCKED_ON_DEVICE", "message": "Device decided not to load"}], checks=g.checks, offline=offline, captured_at=captured_at,
                 decided_at=now, actor_id=p.id)
     try:
@@ -312,11 +344,7 @@ def close(db: Session, p: Principal, shipment_key: str, unsynced: int = 0) -> di
         blockers.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
     if unsynced:
         blockers.append({"code": "PROVISIONAL_PENDING", "message": f"{unsynced} offline scan(s) on this device are not synced yet"})
-    from app.features.offline_scanner.service import pending_for_shipment
-    for d in pending_for_shipment(db, s.id):
-        blockers.append({"code": "DEVICE_SYNC_PENDING", "device_id": d["device_id"], "snapshot_id": d["snapshot_id"],
-                         "message": f"Device {d['device_id']} ({d['operator']}) holds an offline snapshot issued {d['issued_at']} and has not synced since — "
-                                    f"sync it, or wait for the snapshot to expire at {d['expires_at']}"})
+    blockers += _reconciliation_blockers(db, s)
     for prob in _revalidate(db, pkgs, s):
         blockers.append({"code": "LOADED_PACKAGE_BLOCKED", "message": f"{prob['label']}: {', '.join(b['code'] for b in prob['blockers'])} — unload required", "package_id": prob["package_id"]})
     if blockers:
@@ -347,6 +375,9 @@ def movement(db: Session, p: Principal, shipment_key: str, type: str, location: 
         if s.status != "CLOSED":
             raise ApiError(409, "MANIFEST_OPEN" if s.status == "OPEN" else "ALREADY_DEPARTED", f"Shipment is {s.status}; close the manifest first")
         t = _occurred(occurred_at, s.closed_at)
+        open_items_ = _reconciliation_blockers(db, s)
+        if open_items_:   # e.g. a late offline sync refused a crate after close: it must be dealt with before the truck leaves
+            raise ApiError(409, "DEPARTURE_NOT_RECONCILED", "Shipment cannot depart", {"blockers": open_items_})
         problems = _revalidate(db, pkgs, s)
         if problems:
             tasks = [segregation.create(db, type="REMOVAL_REQUIRED", dedupe_key=f"removal:{pr['package_id']}:{s.id}", package_id=pr["package_id"], shipment_id=s.id,

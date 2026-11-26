@@ -9,12 +9,13 @@ import { Button, Honesty, Mono, Pill, Status, cx, ago, fmtTime } from '../compon
 import { GateChecklist, Reasons } from '../components/domain'
 import { QrCamera } from '../scanner/QrCamera'
 import { decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload, type StoredSnapshot, type SyncResult } from '../scanner/offline'
-import { appendScan, deviceInfo, getPref, getSnapshot, listQueue, putSnapshot, setPref, updateScan } from '../scanner/store'
+import { appendScan, deleteSnapshot, deviceInfo, getPref, getSnapshot, listQueue, putSnapshot, setPref, updateScan } from '../scanner/store'
 import { decodeTokenUnsafe, verifyToken } from '../lib/token'
 import { verifyChain } from '../lib/chain'
 
 type ShipView = Shipment & { expected_units: number; loaded_units: number }
 type Tab = 'scan' | 'queue' | 'setup'
+const SYNC_BATCH = 200   // well under the API's 500-event limit
 interface Shown { kind: 'ONLINE' | 'OFFLINE'; decision: string; label: string | null; reasons: Reason[]; checks: GateCheck[]; at: string; replay?: boolean; event: string }
 
 /* Network state: real connectivity AND an explicit "simulate network loss" switch (needed in mock mode, where the backend lives in this tab). */
@@ -131,7 +132,7 @@ export default function Scanner() {
         }
       } else {
         if (!snap) { setMsg({ tone: 'err', text: 'No offline snapshot for this shipment. Reconnect and prepare offline mode first.' }); return }
-        const r = await decideLocally(token, snap.payload, await listQueue(), Date.now() / 1000)
+        const r = await decideLocally(token, snap.payload, await listQueue(), Date.now() / 1000, Date.parse(snap.verified_at))
         const ev = await appendScan({ token, shipment_id: shipId, scanned_at: now, local_decision: r.decision, local_reasons: r.reasons, local_checks: r.checks, package_id: r.package_id, package_label: r.package_label, units: r.units, status: 'PENDING', snapshot_id: snap.payload.id })
         setShown({ kind: 'OFFLINE', decision: r.decision, label: r.package_label, reasons: r.reasons, checks: r.checks, at: now, event: ev.client_event_id })
         buzz(r.decision === 'PROVISIONAL_ACCEPT')
@@ -151,30 +152,57 @@ export default function Scanner() {
   /* ── sync the device queue (all unsynced events, in chain order) ── */
   const sync = async () => {
     setBusy('sync'); setMsg(null)
+    let done = 0, conflicts = 0
+    const decided = new Set<string>()
     try {
       const unsynced = (await listQueue()).filter(q => !q.synced_at).sort((a, b) => a.seq - b.seq)
       if (!unsynced.length) { setMsg({ tone: 'ok', text: 'Nothing to sync' }); return }
       const stored = (await Promise.all([...new Set(unsynced.map(e => e.shipment_id))].map(getSnapshot))).filter((x): x is StoredSnapshot => !!x)
-      const res = await api.post<{ results: (SyncResult & { scan?: ScanDecision })[]; chain: { ok: boolean; broken_at?: number } }>('/sync/scans', {
-        device_id: dev?.device_id,
-        events: unsynced.map(e => ({ client_event_id: e.client_event_id, seq: e.seq, prev_hash: e.prev_hash, hash: e.hash, token: e.token, shipment_id: e.shipment_id,
-          scanned_at: e.scanned_at, local_decision: e.local_decision, local_reasons: e.local_reasons, snapshot_id: snapshotFor(e, stored) })),
-      })
-      if (!res.chain.ok) { setMsg({ tone: 'err', text: `Server rejected the batch: device chain broken at seq ${res.chain.broken_at}. Escalate — events were altered after capture.` }); return }
-      const at = new Date().toISOString()
-      for (const r of res.results) {
-        const ev = unsynced.find(e => e.client_event_id === r.client_event_id); if (!ev) continue
-        const status = reconciledStatus(ev, r)
-        await updateScan({ ...ev, status, synced_at: at, note: r.note || ev.note, server_reasons: r.scan?.reasons ?? ev.server_reasons, server_checks: r.scan?.checks ?? ev.server_checks, package_label: r.scan?.package_label ?? ev.package_label })
+      // Bounded batches in chain order (the API takes ≤ 500). Each batch continues from where the last one ended; a failed
+      // batch stops the run, and whatever the server already committed comes back as DUPLICATE on the next sync.
+      for (let i = 0; i < unsynced.length; i += SYNC_BATCH) {
+        const batch = unsynced.slice(i, i + SYNC_BATCH)
+        const res = await api.post<{ results: (SyncResult & { scan?: ScanDecision })[]; chain: { ok: boolean; broken_at?: number } }>('/sync/scans', {
+          device_id: dev?.device_id,
+          events: batch.map(e => ({ client_event_id: e.client_event_id, seq: e.seq, prev_hash: e.prev_hash, hash: e.hash, token: e.token, shipment_id: e.shipment_id,
+            scanned_at: e.scanned_at, local_decision: e.local_decision, local_reasons: e.local_reasons, snapshot_id: snapshotFor(e, stored) })),
+        })
+        if (!res.chain.ok) { setMsg({ tone: 'err', text: `Server rejected the batch: device chain broken at seq ${res.chain.broken_at}. Escalate — events were altered after capture.` }); return }
+        const at = new Date().toISOString()
+        for (const r of res.results) {
+          const ev = batch.find(e => e.client_event_id === r.client_event_id); if (!ev) continue
+          const status = reconciledStatus(ev, r)
+          // A lost online response is recovered here: the server's original decision and the package it identified.
+          await updateScan({ ...ev, status, synced_at: at, note: r.note || ev.note, server_reasons: r.scan?.reasons ?? ev.server_reasons, server_checks: r.scan?.checks ?? ev.server_checks,
+            package_id: r.scan?.package_id ?? ev.package_id, package_label: r.scan?.package_label ?? ev.package_label })
+          decided.add(r.client_event_id)
+          if (status === 'CONFLICT') conflicts++
+        }
+        done += res.results.length
       }
-      // The offline card on the Scan tab was the device's guess; once the server has decided that event, the Queue holds the truth.
-      setShown(cur => (cur && res.results.some(r => r.client_event_id === cur.event) ? null : cur))
-      const c = res.results.filter(r => r.outcome === 'CONFLICT' || r.original_outcome === 'CONFLICT').length
-      setMsg({ tone: c ? 'err' : 'ok', text: `Synced ${res.results.length} event(s)${c ? ` · ${c} conflict(s) need physical action` : ''}` })
-      if (c) setTab('queue')
+      setMsg({ tone: conflicts ? 'err' : 'ok', text: `Synced ${done} event(s)${conflicts ? ` · ${conflicts} conflict(s) need physical action` : ''}` })
+      if (conflicts) setTab('queue')
       loadShips(); await prepareOffline(true)
-    } catch (e: any) { setMsg({ tone: 'err', text: e?.message ?? 'Sync failed' }) }
-    finally { await refreshLocal(); setBusy(null) }
+    } catch (e: any) { setMsg({ tone: 'err', text: `${done ? `Synced ${done} event(s), then: ` : ''}${e?.message ?? 'Sync failed'}` }) }
+    finally {
+      // The offline card on the Scan tab was the device's guess; once the server has decided that event, the Queue holds the truth.
+      setShown(cur => (cur && decided.has(cur.event) ? null : cur))
+      await refreshLocal(); setBusy(null)
+    }
+  }
+
+  /* ── end the offline session: hand the authorization back so the manifest can close ── */
+  const endOffline = async () => {
+    if (!snap || !shipId) return
+    setBusy('settle'); setMsg(null)
+    try {
+      const [info, q] = await Promise.all([deviceInfo(), listQueue()])
+      await api.post(`/offline/snapshots/${snap.payload.id}/settle`, { device_id: info.device_id, local_seq: info.seq, pending: q.filter(x => !x.synced_at).length })
+      await deleteSnapshot(shipId); setSnap(undefined)
+      setMsg({ tone: 'ok', text: 'Offline session ended. This phone can no longer load offline for this shipment.' })
+    } catch (e: any) {
+      setMsg({ tone: 'err', text: e?.code === 'SETTLEMENT_PENDING_EVENTS' ? 'Sync every queued scan first, then end the session.' : e?.message ?? 'Could not end the offline session' })
+    } finally { setBusy(null) }
   }
 
   if (!user || !can('dispatcher')) return (
@@ -289,6 +317,8 @@ export default function Scanner() {
                 </dl>
               ) : <div className="text-muted">No snapshot. Offline scans need a signed, short-lived manifest snapshot downloaded while online.</div>}
               <Button className="w-full" disabled={!net.online || !shipId} loading={busy === 'snapshot'} onClick={() => prepareOffline()}><Download size={14} /> {snap ? 'Refresh' : 'Download'} signed snapshot</Button>
+              {snap && <Button className="w-full" variant="ghost" disabled={!net.online || !!busy || pending.length > 0} loading={busy === 'settle'} onClick={endOffline}><CloudOff size={14} /> End offline session</Button>}
+              {snap && <div className="text-[11px] leading-relaxed text-muted">The manifest cannot close while this phone holds an offline authorization. Sync, then end the session{pending.length > 0 ? ` (${pending.length} scan(s) still to sync)` : ''}.</div>}
               <div className="text-[11px] leading-relaxed text-muted">Offline, the device checks signature, key, order, snapshot holds, local duplicates and quantity. It cannot know newer holds, other devices’ scans or seal state — so every offline decision is <b className="text-prov">provisional</b> and never counts as loaded until the server accepts it on sync.</div>
             </div>
           </section>

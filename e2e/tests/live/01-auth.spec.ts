@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from '../helpers'
+import { selectByPrefix, signIn } from '../helpers'
 
 test('signs in with the login form and rejects a wrong password', async ({ page }) => {
   await page.goto('/')
@@ -15,6 +15,7 @@ test('signs in with the login form and rejects a wrong password', async ({ page 
 
 test('an operator cannot drive the dispatch gate', async ({ page }) => {
   await signIn(page, 'op.ravi', '/dispatch')
+  await selectByPrefix(page.getByRole('combobox').first(), 'SHP-0004')
   await expect(page.getByText('You are viewing as a non-dispatcher')).toBeVisible()
   await expect(page.getByTestId('crate-PKG-0004').getByRole('button', { name: 'Scan' })).toBeDisabled()
 })

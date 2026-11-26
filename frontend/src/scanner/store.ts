@@ -35,5 +35,6 @@ export const listQueue = async (): Promise<QueuedScan[]> => (await (await db()).
 export const updateScan = async (s: QueuedScan) => { await (await db()).put('queue', s) }
 export const getSnapshot = async (shipment: string): Promise<StoredSnapshot | undefined> => (await db()).get('meta', `snap:${shipment}`)
 export const putSnapshot = async (s: StoredSnapshot) => { await (await db()).put('meta', s, `snap:${s.payload.shipment}`) }
+export const deleteSnapshot = async (shipment: string) => { await (await db()).delete('meta', `snap:${shipment}`) }
 export const getPref = async <T,>(k: string): Promise<T | undefined> => (await db()).get('meta', `pref:${k}`)
 export const setPref = async (k: string, v: unknown) => { await (await db()).put('meta', v, `pref:${k}`) }

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { signIn } from '../helpers'
+import { selectByPrefix, signIn } from '../helpers'
 
 // Two screens, two people: the control-room laptop must learn about a gate event without reloading.
 test('a counterfeit scan at the dock reaches the control room in real time', async ({ browser }) => {
@@ -9,6 +9,7 @@ test('a counterfeit scan at the dock reaches the control room in real time', asy
   await expect(room.getByText('LIVE', { exact: true })).toBeVisible()          // socket authenticated with a ticket
 
   await signIn(dock, 'disp.kiran', '/dispatch')
+  await selectByPrefix(dock.getByRole('combobox').first(), 'SHP-0004')   // waits for the shipment list before scanning
   const paste = dock.getByPlaceholder('Paste any AQ1.… token')
   await paste.fill('AQ1.not-a-real-label')
   await paste.press('Enter')

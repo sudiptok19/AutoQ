@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.auth import Principal, require_roles
+from app.core.errors import ApiError
 from app.db.session import get_db
 from app.features.offline_scanner import service as s
 
@@ -23,6 +24,15 @@ class EventIn(BaseModel):
     local_reasons: list[dict] = Field(default_factory=list)
     snapshot_id: str | None = Field(None, max_length=40)   # the snapshot this decision was made under (overrides the batch default)
 
+    @field_validator("scanned_at")
+    @classmethod
+    def _aware(cls, v: str) -> str:
+        try:
+            s.parse_capture_time(v)
+        except ApiError as e:
+            raise ValueError(e.message)
+        return v
+
 
 class SyncIn(BaseModel):
     device_id: str = Field(pattern=DEVICE)
@@ -40,3 +50,25 @@ def snapshot(shipment_id: str, device_id: str = Query(pattern=DEVICE), local_seq
 @router.post("/sync/scans")
 def sync(body: SyncIn, db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
     return s.sync(db, p, body.device_id, body.snapshot_id, [e.model_dump() for e in body.events])
+
+
+class SettleIn(BaseModel):
+    device_id: str = Field(pattern=DEVICE)
+    local_seq: int = Field(ge=0)
+    pending: int = Field(ge=0)
+
+
+class RecoverIn(BaseModel):
+    reason: str = Field(min_length=10, max_length=2000)
+
+
+@router.post("/offline/snapshots/{snapshot_id}/settle")
+def settle(snapshot_id: str, body: SettleIn, db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
+    """End an offline session: the device hands back its authorization (requires an empty queue at the server head)."""
+    return s.settle(db, p, snapshot_id, body.device_id, body.local_seq, body.pending)
+
+
+@router.post("/offline/snapshots/{snapshot_id}/recover")
+def recover(snapshot_id: str, body: RecoverIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_manager"))) -> dict:
+    """Lost or unavailable device: settle its authorization explicitly, with an audited reason (Quality Manager)."""
+    return s.recover(db, p, snapshot_id, body.reason)
