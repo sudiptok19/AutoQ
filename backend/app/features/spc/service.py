@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from math import isfinite
 from operator import attrgetter
 from statistics import mean, stdev
+from typing import Literal, cast
 
 from app.core.errors import ApiError
 from app.ports import SpcBaseline, SpcPoint, SpcRule
@@ -19,6 +21,104 @@ class Series:
     rule: dict
     points: list[dict]
     warnings: list[dict]
+
+
+INVESTIGATION_QUALIFICATION_VERSION = "spc-investigation-1"
+FIVE_RISING_COUNT = 5
+
+
+@dataclass(frozen=True)
+class InvestigationContext:
+    part_id: str
+    station_id: str
+    method_version: str
+    profile_id: str
+    reference_sha256: str
+
+
+@dataclass(frozen=True)
+class InvestigationObservation:
+    observation_id: str
+    inspection_id: str
+    unit_id: str | None
+    t: datetime
+    score: float | None
+    profile_id: str | None
+    reference_sha256: str | None
+    calibrated: bool
+    evidence_source: Literal["LIVE_CAPTURE", "PRERECORDED_EVAL", "SYNTHETIC_TEST"] | None
+    provenance_verified: bool
+    routine: bool | None
+
+
+@dataclass(frozen=True)
+class InvestigationGap:
+    observation_id: str
+    t: datetime
+    reason: str
+
+
+InvestigationEvent = InvestigationObservation | InvestigationGap
+BaselineStatus = Literal["COLLECTING", "LOW_VARIANCE", "READY"]
+RuleName = Literal["CUSUM_UPPER", "FIVE_RISING"]
+IssueCode = Literal[
+    "NON_PRODUCTION_SOURCE", "REINSPECTION", "ROUTINE_STATUS_UNKNOWN", "UNIT_ID_MISSING",
+    "UNIT_ALREADY_OBSERVED", "CALIBRATION_CONTEXT_MISSING", "CALIBRATION_CONTEXT_CHANGED",
+    "UNCALIBRATED", "CAPTURE_PROVENANCE_UNVERIFIED", "SCORE_MISSING", "DECLARED_GAP",
+    "TARGET_NOT_FOUND", "BASELINE_STABILITY_UNVERIFIED", "PRODUCTION_COVERAGE_UNKNOWN",
+]
+
+
+@dataclass(frozen=True)
+class InvestigationIssue:
+    code: IssueCode
+    observation_id: str | None = None
+    inspection_id: str | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class InvestigationBaseline:
+    status: BaselineStatus
+    stats: SpcBaseline
+    observations: tuple[InvestigationObservation, ...]
+
+
+@dataclass(frozen=True)
+class InvestigationMeasurement:
+    observation: InvestigationObservation
+    z: float
+    cusum: float
+
+
+@dataclass(frozen=True)
+class CusumEvidence:
+    anchor_observation_id: str
+    previous_zero_observation_id: str | None
+    contributors: tuple[InvestigationMeasurement, ...]
+
+
+@dataclass(frozen=True)
+class FiveRisingEvidence:
+    anchor_observation_id: str
+    contributors: tuple[InvestigationMeasurement, ...]
+
+
+@dataclass(frozen=True)
+class Investigation:
+    context: InvestigationContext
+    target_inspection_id: str
+    status: Literal["SIGNAL", "NO_SIGNAL", "INSUFFICIENT_EVIDENCE"]
+    baseline: InvestigationBaseline
+    rule: SpcRule
+    issues: tuple[InvestigationIssue, ...]
+    trigger: InvestigationMeasurement | None
+    rules: tuple[RuleName, ...]
+    cusum: CusumEvidence | None
+    five_rising: FiveRisingEvidence | None
+    qualification_version: str = INVESTIGATION_QUALIFICATION_VERSION
+    anchor_basis: Literal["INSPECTION_ORDER"] = "INSPECTION_ORDER"
+    five_rising_count: int = FIVE_RISING_COUNT
 
 
 _REMEDIATION = {
@@ -92,8 +192,12 @@ def _freeze(points: list[SpcPoint], min_n: int) -> SpcBaseline | None:
     if len(points) < min_n:
         return None
     scores = [point.score for point in points[:min_n]]
+    return _sample_baseline(scores, points[min_n - 1].t)
+
+
+def _sample_baseline(scores: list[float], frozen_at: datetime) -> SpcBaseline:
     # Sample standard deviation uses n - 1 degrees of freedom.
-    return SpcBaseline(min_n, float(mean(scores)), stdev(scores), points[min_n - 1].t)
+    return SpcBaseline(len(scores), float(mean(scores)), stdev(scores), frozen_at)
 
 
 def freeze_baseline(points: list[SpcPoint], rule: SpcRule) -> SpcBaseline | None:
@@ -127,22 +231,50 @@ def _resolve_baseline(points: list[SpcPoint], baseline: SpcBaseline | None, min_
     return SpcBaseline(len(points), None, None, None)
 
 
-def _warning(inspection_id: str, index: int, cusum: float, streak: int, h_sigma: float) -> dict | None:
-    rules, reasons = [], []
+def _triggered_rules(cusum: float, streak: int, h_sigma: float) -> tuple[RuleName, ...]:
+    rules: list[RuleName] = []
     if cusum > h_sigma:
         rules.append("CUSUM_UPPER")
-        reasons.append(f"upper CUSUM {cusum:.4g}σ > {h_sigma:.4g}σ")
-    if streak >= 5:
+    if streak >= FIVE_RISING_COUNT:
         rules.append("FIVE_RISING")
-        reasons.append("five consecutive strictly rising scores")
+    return tuple(rules)
+
+
+def _warning(inspection_id: str, index: int, cusum: float, streak: int, h_sigma: float) -> dict | None:
+    rules = _triggered_rules(cusum, streak, h_sigma)
     if not rules:
         return None
+    reasons = {
+        "CUSUM_UPPER": f"upper CUSUM {cusum:.4g}σ > {h_sigma:.4g}σ",
+        "FIVE_RISING": "five consecutive strictly rising scores",
+    }
     return {
         "inspection_id": inspection_id,
         "at_index": index,
-        "rules": rules,
-        "message": f"Suspected drift ({' and '.join(reasons)})",
+        "rules": list(rules),
+        "message": f"Suspected drift ({' and '.join(reasons[name] for name in rules)})",
     }
+
+
+def _z_score(score: float, baseline: SpcBaseline) -> float:
+    z = (score - baseline.mean) / baseline.std
+    if not isfinite(z):
+        raise _invalid("SPC_BASELINE_INVALID", "SPC normalization exceeds the finite numeric range")
+    return z
+
+
+@dataclass
+class _Monitor:
+    cusum: float = 0.0
+    streak: int = 0
+    previous_score: float | None = None
+
+    def update(self, score: float, z: float, rule: SpcRule) -> None:
+        self.cusum = max(0.0, self.cusum + z - rule.k_sigma)
+        if not isfinite(self.cusum):
+            raise _invalid("SPC_BASELINE_INVALID", "SPC accumulation exceeds the finite numeric range")
+        self.streak = self.streak + 1 if self.previous_score is not None and score > self.previous_score else 1
+        self.previous_score = score
 
 
 def compute_series(points: list[SpcPoint], baseline: SpcBaseline | None, rule: SpcRule) -> Series:
@@ -161,23 +293,17 @@ def compute_series(points: list[SpcPoint], baseline: SpcBaseline | None, rule: S
         monitoring_start = max(earlier, min(baseline.n, through_cutoff))
 
     warnings, series_points = [], []
-    cusum, streak, previous_score = 0.0, 0, None
+    monitor = _Monitor()
     for index, point in enumerate(ordered):
         z, point_cusum = None, None
         if status == "READY":
-            z = (point.score - baseline.mean) / baseline.std
-            if not isfinite(z):
-                raise _invalid("SPC_BASELINE_INVALID", "SPC normalization exceeds the finite numeric range")
+            z = _z_score(point.score, baseline)
             if index >= monitoring_start:
-                cusum = max(0.0, cusum + z - rule.k_sigma)
-                if not isfinite(cusum):
-                    raise _invalid("SPC_BASELINE_INVALID", "SPC accumulation exceeds the finite numeric range")
-                streak = streak + 1 if previous_score is not None and point.score > previous_score else 1
-                previous_score = point.score
-                warning = _warning(point.inspection_id, index, cusum, streak, rule.h_sigma)
+                monitor.update(point.score, z, rule)
+                warning = _warning(point.inspection_id, index, monitor.cusum, monitor.streak, rule.h_sigma)
                 if warning is not None:
                     warnings.append(warning)
-            point_cusum = cusum
+            point_cusum = monitor.cusum
         series_points.append({
             "inspection_id": point.inspection_id,
             "t": _iso_z(point.t),
@@ -205,3 +331,178 @@ def compute_series(points: list[SpcPoint], baseline: SpcBaseline | None, rule: S
         points=series_points,
         warnings=warnings,
     )
+
+
+def _has_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _event_order(event: InvestigationEvent) -> tuple[datetime, int, str]:
+    if isinstance(event, InvestigationGap):
+        return event.t, 0, event.observation_id
+    return event.t, 1, event.inspection_id
+
+
+def _investigation_events(events: Sequence[InvestigationEvent]) -> list[InvestigationEvent]:
+    if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
+        raise _invalid("SPC_INPUT_INVALID", "Investigation requires a sequence of events")
+    observations: dict[str, InvestigationEvent] = {}
+    inspection_ids: set[str] = set()
+    for event in events:
+        if not isinstance(event, (InvestigationObservation, InvestigationGap)) or not _has_id(event.observation_id):
+            raise _invalid("SPC_INPUT_INVALID", "Investigation events require a nonempty observation ID")
+        event = replace(event, t=_utc_time(event.t, "SPC_INPUT_INVALID"))
+        if isinstance(event, InvestigationObservation):
+            if (
+                not _has_id(event.inspection_id)
+                or any(value is not None and not _has_id(value) for value in (event.unit_id, event.profile_id))
+                or (event.reference_sha256 is not None and not _is_sha256(event.reference_sha256))
+                or (event.score is not None and not _valid_score(event.score))
+                or type(event.calibrated) is not bool
+                or type(event.provenance_verified) is not bool
+                or (event.routine is not None and type(event.routine) is not bool)
+                or event.evidence_source not in (None, "LIVE_CAPTURE", "PRERECORDED_EVAL", "SYNTHETIC_TEST")
+            ):
+                raise _invalid("SPC_INPUT_INVALID", "Invalid observation metadata or score for SPC investigation")
+        elif not _has_id(event.reason):
+            raise _invalid("SPC_INPUT_INVALID", "A declared investigation gap requires a reason")
+        previous = observations.get(event.observation_id)
+        if previous == event:
+            continue
+        if previous is not None:
+            raise _invalid("SPC_INPUT_INVALID", "Conflicting events share an observation ID")
+        if isinstance(event, InvestigationObservation):
+            if event.inspection_id in inspection_ids:
+                raise _invalid("SPC_INPUT_INVALID", "An inspection ID maps to multiple observations")
+            inspection_ids.add(event.inspection_id)
+        observations[event.observation_id] = event
+    return sorted(observations.values(), key=_event_order)
+
+
+def _exclusion(event: InvestigationObservation, context: InvestigationContext, primary_units: set[str]) -> IssueCode | None:
+    if event.evidence_source in ("PRERECORDED_EVAL", "SYNTHETIC_TEST"):
+        return "NON_PRODUCTION_SOURCE"
+    if event.routine is False:
+        return "REINSPECTION"
+    if event.routine is None:
+        return "ROUTINE_STATUS_UNKNOWN"
+    if event.unit_id is None:
+        return "UNIT_ID_MISSING"
+    if event.unit_id in primary_units:
+        return "UNIT_ALREADY_OBSERVED"
+    # Reserve a known routine attempt even if it produced unusable evidence.
+    primary_units.add(event.unit_id)
+    if event.profile_id is None or event.reference_sha256 is None:
+        return "CALIBRATION_CONTEXT_MISSING"
+    if (event.profile_id, event.reference_sha256) != (context.profile_id, context.reference_sha256):
+        return "CALIBRATION_CONTEXT_CHANGED"
+    if not event.calibrated:
+        return "UNCALIBRATED"
+    if event.evidence_source != "LIVE_CAPTURE" or not event.provenance_verified:
+        return "CAPTURE_PROVENANCE_UNVERIFIED"
+    if event.score is None:
+        return "SCORE_MISSING"
+    return None
+
+
+def investigate(
+    context: InvestigationContext,
+    events: Sequence[InvestigationEvent],
+    target_inspection_id: str,
+    rule: SpcRule,
+) -> Investigation:
+    """Explain a review-only candidate from a committed inspection prefix for one part/station/method.
+
+    Use inspection record time and inspection ID, with declared gaps first at tied times.
+    For a replay, pass the original context, rule and immutable event prefix. Historical chart
+    points and baselines lack provenance and serial membership for this versioned analysis.
+    """
+    _validate_rule(rule)
+    if (
+        not isinstance(context, InvestigationContext)
+        or not all(_has_id(value) for value in (context.part_id, context.station_id, context.method_version, context.profile_id, target_inspection_id))
+        or not _is_sha256(context.reference_sha256)
+    ):
+        raise _invalid("SPC_INPUT_INVALID", "Investigation requires a chart context, calibrated reference identity, and target inspection ID")
+
+    issues = [InvestigationIssue("PRODUCTION_COVERAGE_UNKNOWN"), InvestigationIssue("BASELINE_STABILITY_UNVERIFIED")]
+    ordered = _investigation_events(events)
+    target_index = next((index for index, event in enumerate(ordered)
+                         if isinstance(event, InvestigationObservation) and event.inspection_id == target_inspection_id), None)
+    prefix = [] if target_index is None else ordered[:target_index + 1]
+    if target_index is None:
+        issues.append(InvestigationIssue("TARGET_NOT_FOUND", inspection_id=target_inspection_id))
+    primary_units: set[str] = set()
+    reference: list[InvestigationObservation] = []
+    baseline = None
+    monitor = _Monitor()
+    excursion: list[InvestigationMeasurement] = []
+    rising: list[InvestigationMeasurement] = []
+    previous_zero = None
+    trigger = None
+
+    for event in prefix:
+        if isinstance(event, InvestigationGap):
+            code = "DECLARED_GAP"
+            issues.append(InvestigationIssue(code, event.observation_id, detail=event.reason))
+        else:
+            code = _exclusion(event, context, primary_units)
+            if code is not None:
+                issues.append(InvestigationIssue(code, event.observation_id, event.inspection_id))
+        if code is not None:
+            if code in ("NON_PRODUCTION_SOURCE", "REINSPECTION", "UNIT_ALREADY_OBSERVED"):
+                continue
+            if baseline is None or code == "CALIBRATION_CONTEXT_CHANGED":
+                reference.clear()
+                baseline = None
+            monitor = _Monitor()
+            excursion.clear()
+            rising.clear()
+            previous_zero = None
+            continue
+
+        assert isinstance(event, InvestigationObservation) and event.score is not None
+        if baseline is None:
+            reference.append(event)
+            if len(reference) == rule.min_n:
+                baseline = _sample_baseline([cast(float, row.score) for row in reference], event.t)
+            continue
+        if baseline.std == 0 or baseline.std < rule.min_std:
+            continue
+
+        z = _z_score(event.score, baseline)
+        monitor.update(event.score, z, rule)
+        measured = InvestigationMeasurement(event, z, monitor.cusum)
+        if monitor.cusum > 0:
+            excursion.append(measured)
+        else:
+            excursion.clear()
+            previous_zero = event.observation_id
+        if monitor.streak == 1:
+            rising.clear()
+        rising.append(measured)
+        if event.inspection_id == target_inspection_id:
+            trigger = measured
+
+    cusum = None
+    five_rising = None
+    rules: tuple[RuleName, ...] = ()
+    if trigger is not None:
+        rules = _triggered_rules(monitor.cusum, monitor.streak, rule.h_sigma)
+        if "CUSUM_UPPER" in rules:
+            cusum = CusumEvidence(excursion[0].observation.observation_id, previous_zero, tuple(excursion))
+        if "FIVE_RISING" in rules:
+            five_rising = FiveRisingEvidence(rising[0].observation.observation_id, tuple(rising))
+    if baseline is None:
+        stats = SpcBaseline(len(reference), None, None, None)
+        baseline_status = "COLLECTING"
+    else:
+        stats = baseline
+        baseline_status = "LOW_VARIANCE" if baseline.std == 0 or baseline.std < rule.min_std else "READY"
+    status = "INSUFFICIENT_EVIDENCE" if trigger is None else "SIGNAL" if rules else "NO_SIGNAL"
+    return Investigation(context, target_inspection_id, status, InvestigationBaseline(baseline_status, stats, tuple(reference)),
+                         rule, tuple(issues), trigger, rules, cusum, five_rising)

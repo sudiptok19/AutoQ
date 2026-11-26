@@ -9,7 +9,15 @@ from app.core import errors
 from app.core.auth import Principal, current_principal
 from app.db.session import get_db
 from app.features.spc.router import router
-from app.features.spc.service import compute_series, freeze_baseline
+from app.features.spc.service import (
+    INVESTIGATION_QUALIFICATION_VERSION,
+    InvestigationContext,
+    InvestigationGap,
+    InvestigationObservation,
+    compute_series,
+    freeze_baseline,
+    investigate,
+)
 from app.ports import SpcBaseline, SpcPoint, SpcRule, ports
 
 pytestmark = pytest.mark.nodb
@@ -171,6 +179,196 @@ def test_invalid_persisted_baseline_is_not_recomputed(changes):
     with pytest.raises(errors.ApiError) as error:
         compute_series(points, baseline, RULE)
     assert error.value.code == "SPC_BASELINE_INVALID"
+
+
+CONTEXT = InvestigationContext("part-1", "station-1", "gd-0.3", "profile-1", "a" * 64)
+
+
+def _routine_observations(scores):
+    # Analytic fixtures simulate verified routine metadata. They are not evidence of a live process.
+    return [
+        InvestigationObservation(
+            f"obs-{i:02d}", f"insp-{i:02d}", f"unit-{i:02d}", START + timedelta(seconds=i), score,
+            CONTEXT.profile_id, CONTEXT.reference_sha256, True, "LIVE_CAPTURE", True, True,
+        )
+        for i, score in enumerate(scores)
+    ]
+
+
+def _investigate(points, target, rule=RULE):
+    return investigate(CONTEXT, points, target.inspection_id, rule)
+
+
+def test_investigation_explains_both_rules_with_stable_anchors_and_exact_membership():
+    events = _routine_observations([*BASE_SCORES, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0])
+    rule = replace(RULE, h_sigma=4)
+    result = _investigate(events, events[7], rule)
+
+    assert result.status == "SIGNAL"
+    assert result.qualification_version == INVESTIGATION_QUALIFICATION_VERSION
+    assert result.anchor_basis == "INSPECTION_ORDER"
+    assert result.five_rising_count == 5
+    assert result.rule == rule
+    assert result.baseline.status == "READY"
+    assert result.baseline.stats == SpcBaseline(3, 0.5, 0.25, events[2].t)
+    assert result.baseline.observations == tuple(events[:3])
+    assert result.rules == ("CUSUM_UPPER", "FIVE_RISING")
+    assert result.trigger.observation == events[7]
+    assert result.trigger.z == pytest.approx(1.8)
+    assert result.trigger.cusum == pytest.approx(4.5)
+    assert result.cusum.anchor_observation_id == result.five_rising.anchor_observation_id == events[3].observation_id
+    assert result.cusum.previous_zero_observation_id is None
+    assert [p.observation for p in result.cusum.contributors] == events[3:8]
+    assert [p.observation for p in result.five_rising.contributors] == events[3:8]
+    assert {issue.code for issue in result.issues} == {"PRODUCTION_COVERAGE_UNKNOWN", "BASELINE_STABILITY_UNVERIFIED"}
+
+    same_event_with_offset = replace(events[3], t=events[3].t.astimezone(timezone(timedelta(hours=5, minutes=30))))
+    assert _investigate([same_event_with_offset, *reversed(events)], events[7], rule) == result
+    sustained = _investigate(events, events[-1], rule)
+    assert sustained.five_rising.anchor_observation_id == result.five_rising.anchor_observation_id
+    assert [p.observation for p in sustained.five_rising.contributors] == events[3:]
+
+
+def test_investigation_cusum_starts_after_last_zero_and_requires_strict_crossing():
+    events = _routine_observations([*BASE_SCORES, 0.9, 0.25, 0.625, 0.875, 1.0])
+    at_threshold = _investigate(events, events[-2])
+    assert at_threshold.status == "NO_SIGNAL"
+    assert at_threshold.trigger.cusum == 1
+
+    crossed = _investigate(events, events[-1])
+    assert crossed.rules == ("CUSUM_UPPER",)
+    assert crossed.five_rising is None
+    assert crossed.trigger.cusum == 2.5
+    assert crossed.cusum.anchor_observation_id == events[-2].observation_id
+    assert crossed.cusum.previous_zero_observation_id == events[-3].observation_id
+    assert [p.observation.inspection_id for p in crossed.cusum.contributors] == [p.inspection_id for p in events[-2:]]
+
+
+def test_investigation_ignores_explicit_retests_and_nonproduction_rows_in_both_phases():
+    events = _routine_observations([1.0, 0.9, *BASE_SCORES, 0.1, 0.2, 1.0, 0.95, 0.3, 0.4, 0.5])
+    events[0] = replace(events[0], evidence_source="SYNTHETIC_TEST", unit_id=events[2].unit_id)
+    events[1] = replace(events[1], routine=False, unit_id=events[3].unit_id)
+    events[7] = replace(events[7], evidence_source="PRERECORDED_EVAL", unit_id=events[9].unit_id)
+    events[8] = replace(events[8], unit_id=events[5].unit_id)
+    result = _investigate(events, events[-1], replace(RULE, h_sigma=100))
+
+    assert result.baseline.observations == tuple(events[2:5])
+    assert result.rules == ("FIVE_RISING",)
+    assert result.cusum is None
+    assert [p.observation for p in result.five_rising.contributors] == [*events[5:7], *events[9:]]
+    excluded = {issue.observation_id: issue.code for issue in result.issues if issue.observation_id}
+    assert excluded == {
+        events[0].observation_id: "NON_PRODUCTION_SOURCE",
+        events[1].observation_id: "REINSPECTION",
+        events[7].observation_id: "NON_PRODUCTION_SOURCE",
+        events[8].observation_id: "UNIT_ALREADY_OBSERVED",
+    }
+
+
+@pytest.mark.parametrize("revision_change", [{"profile_id": "profile-2"}, {"reference_sha256": "b" * 64}])
+def test_investigation_calibration_change_requires_fresh_baseline(revision_change):
+    events = _routine_observations([*BASE_SCORES, 1.0, 0.9, *BASE_SCORES, 0.95])
+    events[4] = replace(events[4], **revision_change)
+    assert _investigate(events, events[3]).status == "SIGNAL"
+    interrupted = _investigate(events, events[4])
+    assert interrupted.status == "INSUFFICIENT_EVIDENCE"
+    assert interrupted.baseline.stats.n == 0
+    assert interrupted.issues[-1].code == "CALIBRATION_CONTEXT_CHANGED"
+    restored = _investigate(events, events[-1])
+    assert restored.baseline.observations == tuple(events[5:8])
+    assert restored.cusum.anchor_observation_id == events[-1].observation_id
+
+
+@pytest.mark.parametrize(("changes", "code"), [
+    ({"score": None}, "SCORE_MISSING"),
+    ({"provenance_verified": False}, "CAPTURE_PROVENANCE_UNVERIFIED"),
+    ({"evidence_source": None}, "CAPTURE_PROVENANCE_UNVERIFIED"),
+    ({"calibrated": False}, "UNCALIBRATED"),
+    ({"routine": None}, "ROUTINE_STATUS_UNKNOWN"),
+    ({"unit_id": None}, "UNIT_ID_MISSING"),
+    ({"reference_sha256": None}, "CALIBRATION_CONTEXT_MISSING"),
+    (None, "DECLARED_GAP"),
+])
+def test_investigation_known_gaps_break_both_rules(changes, code):
+    events = _routine_observations([*BASE_SCORES, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9])
+    gap = events[7]
+    events[7] = (InvestigationGap(gap.observation_id, gap.t, "Expected routine capture absent")
+                 if changes is None else replace(gap, **changes))
+    result = _investigate(events, events[-1], replace(RULE, h_sigma=2))
+
+    assert result.status == "NO_SIGNAL"
+    assert result.rules == ()
+    assert result.trigger.cusum == pytest.approx(1.1)
+    assert result.baseline.observations == tuple(events[:3])
+    assert (result.issues[-1].code, result.issues[-1].observation_id) == (code, gap.observation_id)
+    assert result.issues[-1].detail == ("Expected routine capture absent" if changes is None else None)
+
+
+def test_investigation_unscored_primary_is_reserved_and_baseline_does_not_bridge_gap():
+    events = _routine_observations([0.1, None, 0.2, *BASE_SCORES, 0.9])
+    events[2] = replace(events[2], unit_id=events[1].unit_id)
+    insufficient = _investigate(events, events[2])
+    assert insufficient.status == "INSUFFICIENT_EVIDENCE"
+    assert insufficient.baseline.observations == ()
+    assert [issue.code for issue in insufficient.issues[-2:]] == ["SCORE_MISSING", "UNIT_ALREADY_OBSERVED"]
+
+    result = _investigate(events, events[-1])
+    assert result.baseline.observations == tuple(events[3:6])
+    assert result.status == "SIGNAL"
+
+
+def test_investigation_distinguishes_collecting_low_variance_and_missing_target():
+    events = _routine_observations([0.5, 0.5, 0.5, 0.95])
+    collecting = _investigate(events, events[1])
+    assert collecting.status == "INSUFFICIENT_EVIDENCE"
+    assert collecting.baseline.status == "COLLECTING"
+    assert collecting.baseline.stats == SpcBaseline(2, None, None, None)
+    low_variance = _investigate(events, events[-1])
+    assert low_variance.status == "INSUFFICIENT_EVIDENCE"
+    assert low_variance.baseline.status == "LOW_VARIANCE"
+    assert low_variance.trigger is low_variance.cusum is low_variance.five_rising is None
+    missing = investigate(CONTEXT, events, "missing-inspection", RULE)
+    assert missing.status == "INSUFFICIENT_EVIDENCE"
+    assert missing.issues[-1].code == "TARGET_NOT_FOUND"
+
+
+@pytest.mark.parametrize("changes", [{"score": 0.9}, {"observation_id": "another-observation"}])
+def test_investigation_rejects_conflicting_observation_identity(changes):
+    events = _routine_observations(BASE_SCORES)
+    with pytest.raises(errors.ApiError) as error:
+        _investigate([*events, replace(events[0], **changes)], events[-1])
+    assert error.value.code == "SPC_INPUT_INVALID"
+
+
+def test_investigation_orders_tied_inspections_by_inspection_id_after_any_declared_gap():
+    events = _routine_observations([*BASE_SCORES, 0.65, 0.7, 0.75, 0.8, 0.85])
+    events[-2] = replace(events[-2], observation_id="z-observation")
+    events[-1] = replace(events[-1], observation_id="a-observation", t=events[-2].t)
+    rule = replace(RULE, h_sigma=100)
+
+    result = _investigate(tuple(reversed(events)), events[-1], rule)
+    assert result.rules == ("FIVE_RISING",)
+    assert [p.observation for p in result.five_rising.contributors] == events[3:]
+    gap = InvestigationGap("last-gap", events[-1].t, "Capture coverage was interrupted")
+    assert _investigate([*events, gap], events[-1], rule).status == "NO_SIGNAL"
+
+
+@pytest.mark.parametrize("events", [None, ""])
+def test_investigation_rejects_invalid_event_collections(events):
+    with pytest.raises(errors.ApiError) as error:
+        investigate(CONTEXT, events, "insp-00", RULE)
+    assert error.value.code == "SPC_INPUT_INVALID"
+
+
+def test_investigation_requires_valid_reference_digests():
+    events = _routine_observations(BASE_SCORES)
+    events[0] = replace(events[0], reference_sha256="unknown")
+    with pytest.raises(errors.ApiError) as error:
+        _investigate(events, events[-1])
+    assert error.value.code == "SPC_INPUT_INVALID"
+    with pytest.raises(errors.ApiError) as error:
+        investigate(replace(CONTEXT, reference_sha256="unknown"), events, events[-1].inspection_id, RULE)
+    assert error.value.code == "SPC_INPUT_INVALID"
 
 
 def _client(persistence, principal=None):
