@@ -211,7 +211,7 @@ def find(db: Session, report_id: str) -> m.Report:
 
 
 def approve(db: Session, p: Principal, report_id: str, reason: str, review_evidence_ids: list[str]) -> dict:
-    r = db.scalars(select(m.Report).where(m.Report.id == report_id).with_for_update()).first()
+    r = db.scalars(select(m.Report).where(m.Report.id == report_id).with_for_update().execution_options(populate_existing=True)).first()
     if not r:
         raise ApiError(404, "REPORT_NOT_FOUND", "Report not found")
     if r.status == "APPROVED":
@@ -250,7 +250,7 @@ def load_snapshot(db: Session, report_id: str) -> ReportSnapshot:
 
 
 def record_pdf(db: Session, snapshot: ReportSnapshot, pdf: bytes, p) -> str:
-    rev = db.scalars(select(m.ReportRevision).where(m.ReportRevision.id == snapshot.revision_id).with_for_update()).one()
+    rev = db.scalars(select(m.ReportRevision).where(m.ReportRevision.id == snapshot.revision_id).with_for_update().execution_options(populate_existing=True)).one()
     sha = put_evidence(db, pdf, "application/pdf", "SYNTHETIC_TEST" if snapshot.evidence_source == "SYNTHETIC_TEST" else "UPLOAD", p.id)
     if rev.pdf_sha256 and rev.pdf_sha256 != sha:
         raise ApiError(500, "REPORT_RENDER_NONDETERMINISTIC", "Re-rendering a frozen revision produced different bytes", {"component": "scar_pdf"})

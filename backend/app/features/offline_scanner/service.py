@@ -7,8 +7,13 @@ Authorization
     ACKNOWLEDGED  the device ended its offline session with an empty queue at the server's chain head
     SUPERSEDED    the device refreshed with an empty queue: its OLDER snapshots for that shipment are settled, never
                   the one just issued (that one authorizes further captures)
-    RECOVERED     a Quality Manager declared the device lost/unavailable, with an audited reason
-  Expiry settles nothing: events captured before expiry may still be on the phone.
+    RECOVERED     a lost device: a Quality Manager REQUESTS recovery (offline authority ends at once, a
+                  DEVICE_RECONCILIATION task is raised), and the snapshot settles only with linked physical
+                  reconciliation evidence or when that task is completed
+  "Empty queue at the head" binds the terminal sequence AND hash. Expiry settles nothing.
+- Load authority is judged at RECEIPT: a provisional event gains automatic load authority only if the server receives
+  it while its snapshot is unsettled, not under recovery and not yet expired. Anything received later needs physical
+  reconciliation (CONFLICT + task), whatever capture time the device claims.
 - Issuance, settlement, recovery and close are serialized on the shipment row. Lock order everywhere in this module:
   device row FIRST, then the business hierarchy (heat → … → shipment) through `lock_set`.
 
@@ -69,7 +74,7 @@ def parse_capture_time(value: str) -> datetime:
 
 
 def _device(db: Session, p: Principal, device_id: str, *, create: bool) -> m.Device:
-    d = db.scalars(select(m.Device).where(m.Device.id == device_id).with_for_update()).first()
+    d = db.scalars(select(m.Device).where(m.Device.id == device_id).with_for_update().execution_options(populate_existing=True)).first()
     if not d:
         if not create:
             raise ApiError(404, "DEVICE_UNKNOWN", "Device has never received a snapshot; download one while online")
@@ -94,7 +99,9 @@ def snapshot_view(db: Session, sn: m.OfflineSnapshot) -> dict:
     return {"snapshot_id": sn.id, "device_id": sn.device_id, "operator": db.get(m.User, sn.operator_id).username, "shipment_id": sn.shipment_id,
             "issued_at": _iso(sn.issued_at), "expires_at": _iso(sn.expires_at), "expired": sn.expires_at <= datetime.now(UTC),
             "device_seq": dev.last_seq if dev else None, "settlement": sn.settlement, "settled_at": _iso(sn.settled_at),
-            "settled_by": db.get(m.User, sn.settled_by).username if sn.settled_by else None, "settlement_reason": sn.settlement_reason}
+            "settled_by": db.get(m.User, sn.settled_by).username if sn.settled_by else None, "settlement_reason": sn.settlement_reason,
+            "settled_seq": sn.settled_seq, "settled_head": sn.settled_head, "recovery_requested_at": _iso(sn.recovery_requested_at),
+            "recovery_task_id": sn.recovery_task_id, "recovery_evidence": sn.recovery_evidence or []}
 
 
 def outstanding_for_shipment(db: Session, shipment_id: str) -> list[dict]:
@@ -104,16 +111,20 @@ def outstanding_for_shipment(db: Session, shipment_id: str) -> list[dict]:
     return [snapshot_view(db, sn) for sn in rows]
 
 
-def _settle(db: Session, sn: m.OfflineSnapshot, how: str, actor_id: str, seq: int, reason: str | None, now: datetime) -> None:
-    sn.settled_at, sn.settlement, sn.settled_by, sn.settled_seq, sn.settlement_reason = now, how, actor_id, seq, reason
+def _settle(db: Session, sn: m.OfflineSnapshot, how: str, actor_id: str, dev: m.Device, reason: str | None, now: datetime) -> None:
+    sn.settled_at, sn.settlement, sn.settled_by, sn.settlement_reason = now, how, actor_id, reason
+    sn.settled_seq, sn.settled_head = dev.last_seq, dev.head_hash
 
 
-def _queue_empty_at_head(dev: m.Device, local_seq: int | None, pending: int | None) -> bool:
-    return pending == 0 and local_seq is not None and local_seq == dev.last_seq
+def _queue_empty_at_head(dev: m.Device, local_seq: int | None, local_head: str | None, pending: int | None) -> bool:
+    """The device attests it holds nothing the server lacks: no pending events, and its chain ends exactly where the
+    server's does (sequence AND hash — a same-length chain with different content is not the same history)."""
+    return pending == 0 and local_seq is not None and local_seq == dev.last_seq and local_head == dev.head_hash
 
 
 # ── issuance, settlement, recovery ─────────────────────────────────────────
-def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, local_seq: int | None = None, pending: int | None = None) -> dict:
+def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, local_seq: int | None = None, local_head: str | None = None,
+             pending: int | None = None) -> dict:
     dev = _device(db, p, device_id, create=True)                       # device row first …
     s0 = dispatch.find_shipment(db, shipment_key)
     [s] = lock_set(db).lock(m.Shipment, [s0.id])                       # … then the shipment: serializes with close/settlement
@@ -142,10 +153,10 @@ def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, lo
     # A refresh from a device with nothing unsynced settles its OLDER authorizations for this shipment. The new one is
     # an authorization to capture more, so it stays outstanding until acknowledged or recovered.
     superseded = []
-    if _queue_empty_at_head(dev, local_seq, pending):
+    if _queue_empty_at_head(dev, local_seq, local_head, pending):
         for old in db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.device_id == dev.id, m.OfflineSnapshot.shipment_id == s.id,
-                                                              m.OfflineSnapshot.settled_at.is_(None)).with_for_update()):
-            _settle(db, old, "SUPERSEDED", p.id, dev.last_seq, f"Refreshed by {sid} with an empty queue", now)
+                                                              m.OfflineSnapshot.settled_at.is_(None)).with_for_update().execution_options(populate_existing=True)):
+            _settle(db, old, "SUPERSEDED", p.id, dev, f"Refreshed by {sid} with an empty queue", now)
             superseded.append(old.id)
     db.add(m.OfflineSnapshot(id=sid, device_id=dev.id, shipment_id=s.id, operator_id=p.id, kid=kid, token=token, issued_at=now, expires_at=now + timedelta(seconds=ttl)))
     db.flush()
@@ -157,7 +168,7 @@ def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, lo
             "device": {"id": dev.id, "last_seq": dev.last_seq, "head": dev.head_hash}}
 
 
-def settle(db: Session, p: Principal, snapshot_id: str, device_id: str, local_seq: int, pending: int) -> dict:
+def settle(db: Session, p: Principal, snapshot_id: str, device_id: str, local_seq: int, local_head: str, pending: int) -> dict:
     """The device hands back its offline authorization. Only possible with nothing unsynced: the server must already hold
     every event captured under it. After settlement the snapshot authorizes nothing (later captures → CONFLICT)."""
     dev = _device(db, p, device_id, create=False)
@@ -166,38 +177,78 @@ def settle(db: Session, p: Principal, snapshot_id: str, device_id: str, local_se
         raise ApiError(404, "SNAPSHOT_NOT_FOUND", "No such snapshot for this device and operator")
     lock_set(db).lock(m.Shipment, [sn.shipment_id])
     db.refresh(sn, with_for_update=True)
-    if sn.settlement == "RECOVERED":
+    if sn.settlement == "RECOVERED" or sn.recovery_requested_at:
         raise ApiError(409, "SNAPSHOT_RECOVERED", "This device was declared lost; its captures need physical verification", snapshot_view(db, sn))
     if sn.settled_at:
         return snapshot_view(db, sn)                                     # idempotent
-    if not _queue_empty_at_head(dev, local_seq, pending):
+    if not _queue_empty_at_head(dev, local_seq, local_head, pending):
         raise ApiError(409, "SETTLEMENT_PENDING_EVENTS", "Sync every queued event before ending the offline session",
-                       {"server_seq": dev.last_seq, "local_seq": local_seq, "pending": pending})
-    _settle(db, sn, "ACKNOWLEDGED", p.id, dev.last_seq, None, datetime.now(UTC))
+                       {"server_seq": dev.last_seq, "server_head": dev.head_hash, "local_seq": local_seq, "local_head": local_head, "pending": pending})
+    _settle(db, sn, "ACKNOWLEDGED", p.id, dev, None, datetime.now(UTC))
     db.flush()
-    audit.append(db, p.username, "OFFLINE_SNAPSHOT_SETTLED", "shipment", sn.shipment_id, data={"snapshot": sn.id, "device": dev.id, "seq": dev.last_seq})
+    audit.append(db, p.username, "OFFLINE_SNAPSHOT_SETTLED", "shipment", sn.shipment_id, data={"snapshot": sn.id, "device": dev.id, "seq": dev.last_seq, "head": dev.head_hash})
     return snapshot_view(db, sn)
 
 
-def recover(db: Session, p: Principal, snapshot_id: str, reason: str) -> dict:
-    """Lost or unavailable device: a Quality Manager settles its authorization explicitly. Nothing is assumed reconciled —
-    anything it syncs later under this snapshot is a CONFLICT that needs physical verification."""
+def recover(db: Session, p: Principal, snapshot_id: str, reason: str, evidence_ids: list[str] | None = None) -> dict:
+    """Lost or unavailable device. Recovery ends the snapshot's offline authority at once, but does not by itself clear
+    the shipment: nothing is assumed reconciled. It settles only with linked physical reconciliation evidence (an
+    uploaded count/inspection record) or when the DEVICE_RECONCILIATION task it raises is completed."""
     sn0 = db.get(m.OfflineSnapshot, snapshot_id)
     if not sn0:
         raise ApiError(404, "SNAPSHOT_NOT_FOUND", "Snapshot not found")
-    dev = db.scalars(select(m.Device).where(m.Device.id == sn0.device_id).with_for_update()).one()
-    lock_set(db).lock(m.Shipment, [sn0.shipment_id])
-    sn = db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.id == snapshot_id).with_for_update()).one()
+    dev = db.scalars(select(m.Device).where(m.Device.id == sn0.device_id).with_for_update().execution_options(populate_existing=True)).one()
+    [ship] = lock_set(db).lock(m.Shipment, [sn0.shipment_id])
+    sn = db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.id == snapshot_id).with_for_update().execution_options(populate_existing=True)).one()
     if sn.settled_at:
         raise ApiError(409, "SNAPSHOT_SETTLED", f"Already settled ({sn.settlement})", snapshot_view(db, sn))
-    _settle(db, sn, "RECOVERED", p.id, dev.last_seq, reason, datetime.now(UTC))
+    evidence = []
+    for sha in dict.fromkeys(evidence_ids or []):
+        ev = db.get(m.Evidence, sha)
+        if not ev:
+            raise ApiError(422, "EVIDENCE_NOT_FOUND", f"Evidence {sha[:12]}… does not exist; upload the reconciliation record first")
+        evidence.append({"sha256": ev.sha256, "media_type": ev.media_type, "evidence_source": ev.evidence_source})
+    now = datetime.now(UTC)
+    first = sn.recovery_requested_at is None
+    if first:
+        sn.recovery_requested_at = now
+        sn.recovery_task_id = segregation.create(
+            db, type="DEVICE_RECONCILIATION", dedupe_key=f"device-recon:{sn.id}", shipment_id=ship.id,
+            reason=f"Device {dev.id} ({db.get(m.User, dev.operator_id).username}) is unavailable: physically reconcile {ship.code}'s truck and "
+                   f"staging lane against the manifest before release. Recovery reason: {reason}",
+            consignee_action={"action": "Count the crates on the truck and in staging; compare with the manifest; record what was found"})
+    elif not evidence:
+        raise ApiError(409, "RECOVERY_IN_PROGRESS", "Recovery already requested: complete its reconciliation task or attach reconciliation evidence",
+                       snapshot_view(db, sn))
+    settled = bool(evidence)
+    if settled:
+        sn.recovery_evidence = evidence
+        _settle(db, sn, "RECOVERED", p.id, dev, reason, now)
+        task = db.scalars(select(m.SegregationTask).where(m.SegregationTask.id == sn.recovery_task_id).with_for_update()
+                          .execution_options(populate_existing=True)).first()
+        if task and task.status == "OPEN":
+            task.status, task.completed_by, task.completed_at = "COMPLETED", p.id, now
+            task.completion_reason = f"Closed by linked reconciliation evidence: {', '.join(e['sha256'][:12] for e in evidence)}"
     db.flush()
-    audit.append(db, p.username, "OFFLINE_DEVICE_RECOVERED", "device", dev.id, reason,
-                 data={"snapshot": sn.id, "shipment": sn.shipment_id, "server_seq": dev.last_seq, "expired": sn.expires_at <= datetime.now(UTC)})
-    raise_alert(db, type="OFFLINE_DEVICE_RECOVERED", severity="HIGH", entity_type="SHIPMENT", entity_id=sn.shipment_id, reason_codes=["DEVICE_RECOVERED"],
-                details={"device_id": dev.id, "snapshot_id": sn.id, "operator": db.get(m.User, dev.operator_id).username, "reason": reason},
-                dedupe_key=f"recover:{sn.id}")
+    audit.append(db, p.username, "OFFLINE_DEVICE_RECOVERED" if settled else "OFFLINE_DEVICE_RECOVERY_REQUESTED", "device", dev.id, reason,
+                 data={"snapshot": sn.id, "shipment": sn.shipment_id, "server_seq": dev.last_seq, "server_head": dev.head_hash,
+                       "evidence": [e["sha256"] for e in evidence], "task": sn.recovery_task_id})
+    if first:
+        raise_alert(db, type="OFFLINE_DEVICE_RECOVERED", severity="HIGH", entity_type="SHIPMENT", entity_id=sn.shipment_id, reason_codes=["DEVICE_RECOVERED"],
+                    details={"device_id": dev.id, "snapshot_id": sn.id, "operator": db.get(m.User, dev.operator_id).username, "reason": reason},
+                    dedupe_key=f"recover:{sn.id}")
     return snapshot_view(db, sn)
+
+
+def complete_recovery(db: Session, p: Principal, task: m.SegregationTask, now: datetime) -> None:
+    """Called inside segregation.complete (shipment already locked) when a DEVICE_RECONCILIATION task is completed:
+    the physical reconciliation is done, so the lost device's snapshot settles."""
+    sn = db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.recovery_task_id == task.id).with_for_update()
+                    .execution_options(populate_existing=True)).first()
+    if sn and not sn.settled_at:
+        dev = db.get(m.Device, sn.device_id)
+        _settle(db, sn, "RECOVERED", p.id, dev, f"Reconciled physically: {task.completion_reason}", now)
+        sn.recovery_evidence = [*(sn.recovery_evidence or []), {"task_id": task.id}]
 
 
 # ── sync ───────────────────────────────────────────────────────────────────
@@ -245,12 +296,14 @@ def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, eve
         prior = db.get(m.DeviceEvent, (dev.id, e["seq"]))
         try:  # recompute from CONTENT: a changed event that reuses the old hash must not pass as a duplicate
             same = bool(prior) and prior.client_event_id == e["client_event_id"] and prior.operator_id == p.id \
-                and chain_hash(prior.prev_hash, e) == prior.hash == e["hash"]
+                and e["prev_hash"] == prior.prev_hash and chain_hash(prior.prev_hash, e) == prior.hash == e["hash"]
         except CryptoError:
             same = False
         if not same:
             raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} differs from the version already synced", {"seq": e["seq"]})
-        if prior.claimed_snapshot_id is not None and e["snapshot_id"] != prior.claimed_snapshot_id:
+        # A recorded claim (including a known "no snapshot") must be repeated exactly. Pre-0006 rows have no reliable
+        # claim metadata: only a non-null legacy value can be compared.
+        if (prior.claim_recorded or prior.claimed_snapshot_id is not None) and e["snapshot_id"] != prior.claimed_snapshot_id:
             raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} now cites a different snapshot than when it was synced",
                            {"seq": e["seq"], "field": "snapshot_id", "original": prior.claimed_snapshot_id})
         results.append(_replay_result(db, prior, e))
@@ -274,16 +327,19 @@ def _snapshot_reasons(db: Session, p: Principal, device_id: str, snap: m.Offline
         return [{"code": "SNAPSHOT_REQUIRED", "message": "Provisional load names no offline snapshot"}]
     if not snap or snap.device_id != device_id or snap.operator_id != p.id or snap.shipment_id != shipment_id:
         return [{"code": "SNAPSHOT_SCOPE_MISMATCH", "message": "Snapshot was not issued to this device, operator and shipment"}]
-    if snap.settlement == "RECOVERED":
+    # Authority is judged at RECEIPT. Settlement attested an empty queue at a chain head, and recovery ended the
+    # device's authority: an event arriving afterwards was not part of that history, whatever capture time it claims.
+    if snap.recovery_requested_at or snap.settlement == "RECOVERED":
         return [{"code": "SNAPSHOT_RECOVERED", "message": "This device was declared lost; its captures need physical verification"}]
+    if snap.settled_at:
+        return [{"code": "SNAPSHOT_SETTLED", "message": f"Received after the offline session was settled ({snap.settlement}, seq {snap.settled_seq}); "
+                                                       "reconcile physically"}]
+    if datetime.now(UTC) >= snap.expires_at:
+        return [{"code": "SNAPSHOT_EXPIRED_AT_RECEIPT", "message": "Received after the snapshot expired; a claimed capture time cannot grant load authority"}]
     if scanned_at > datetime.now(UTC) + CLOCK_SKEW:
         return [{"code": "CAPTURE_TIME_INVALID", "message": "Capture time is in the future"}]
     if scanned_at < snap.issued_at - CLOCK_SKEW:
         return [{"code": "CAPTURE_BEFORE_SNAPSHOT", "message": "Captured before the snapshot was issued"}]
-    if scanned_at >= snap.expires_at:
-        return [{"code": "SNAPSHOT_STALE", "message": "Captured after the snapshot expired"}]
-    if snap.settled_at and scanned_at >= snap.settled_at:
-        return [{"code": "SNAPSHOT_SETTLED", "message": "Captured after the offline session was ended"}]
     return []
 
 
@@ -303,7 +359,10 @@ def _allowlist_reasons(scope: dict, pkg: m.Package | None) -> list[dict]:
 
 
 def _provenance_conflict(db: Session, p: Principal, device_id: str, e: dict, prior: m.Scan, ship: m.Shipment | None, *, physical: bool) -> tuple[str, str | None]:
-    """An existing scan owns this event id, but this capture did not produce it. Never adopt its decision."""
+    """An existing scan owns this event id, but this capture did not produce it. Never adopt its decision.
+    The shipment row is locked BEFORE anything is written, so a blocking task cannot slip past a concurrent departure."""
+    if physical and ship:
+        lock_set(db).lock(m.Shipment, [ship.id])
     note = ("This event's id is already used by a different recorded scan; it was not linked or loaded."
             + (" The crate may have been staged: physically verify and segregate it." if physical else " A quality engineer must review it."))
     audit.append(db, p.username, "DEVICE_EVENT_PROVENANCE_MISMATCH", "device", device_id, note,
@@ -319,7 +378,7 @@ def _provenance_conflict(db: Session, p: Principal, device_id: str, e: dict, pri
 def _apply(p: Principal, device_id: str, e: dict) -> dict:
     """One event = one transaction: gate replay + device_event + checkpoint advance."""
     with session_factory()() as db:
-        dev = db.scalars(select(m.Device).where(m.Device.id == device_id).with_for_update()).one()   # device row first
+        dev = db.scalars(select(m.Device).where(m.Device.id == device_id).with_for_update().execution_options(populate_existing=True)).one()   # device row first
         if dev.last_seq != e["seq"] - 1 or dev.head_hash != e["prev_hash"]:
             raise ApiError(409, "SYNC_RACE", "Another sync advanced this device concurrently; resend from the server head")
         scanned_at = parse_capture_time(e["scanned_at"])
@@ -366,7 +425,7 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
                             dedupe_key=f"offline-conflict:{e['client_event_id']}", audible=True)
         valid_assoc = snap is not None and snap.device_id == device_id and snap.operator_id == p.id
         db.add(m.DeviceEvent(device_id=device_id, seq=e["seq"], client_event_id=e["client_event_id"], prev_hash=e["prev_hash"], hash=e["hash"],
-                             snapshot_id=snap.id if valid_assoc else None, claimed_snapshot_id=claim, scan_id=view["scan_id"] if view else None,
+                             snapshot_id=snap.id if valid_assoc else None, claimed_snapshot_id=claim, claim_recorded=True, scan_id=view["scan_id"] if view else None,
                              local_decision=ld, outcome=outcome, scanned_at=scanned_at, operator_id=p.id))
         dev.last_seq, dev.head_hash = e["seq"], e["hash"]
         db.commit()
