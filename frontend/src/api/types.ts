@@ -74,6 +74,14 @@ export interface MovementEvent { type: 'DEPARTED' | 'CHECKPOINT' | 'DELIVERED'; 
 export interface Shipment {
   id: string; code: string; order_id: string; vehicle_no: string; dock: string; status: ShipmentStatus
   loaded_package_ids: string[]; movements: MovementEvent[]; created_at: string
+  /** Live backend only: unsettled offline authorizations (block close and departure until settled or recovered). */
+  offline_authorizations_open?: OfflineAuthorization[]
+  /** Live backend only: unload/segregate tasks still open against this shipment. */
+  open_physical_tasks?: SegregationTask[]
+}
+export interface OfflineAuthorization {
+  snapshot_id: string; device_id: string; operator: string; issued_at: string; expires_at: string; expired: boolean
+  settlement: 'ACKNOWLEDGED' | 'SUPERSEDED' | 'RECOVERED' | 'LEGACY' | null; settled_at: string | null
 }
 export type GateName = 'SIGNATURE' | 'KEY' | 'IDENTITY' | 'LIFECYCLE' | 'CONTAINMENT' | 'QUARANTINE' | 'ORDER' | 'DUPLICATE' | 'SEAL' | 'QUANTITY' | 'SEQUENCE'
 export interface GateCheck { gate: GateName; status: 'PASS' | 'FAIL' | 'SKIP' | 'WARN'; detail?: string }

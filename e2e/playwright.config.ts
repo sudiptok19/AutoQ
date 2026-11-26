@@ -27,7 +27,12 @@ const apiEnv = {
   AUTOQ_E2E: '1',
   DATABASE_URL: `postgresql+psycopg://${PG}/${E2E_DB}`,
   AUTOQ_EVIDENCE_DIR: fileURLToPath(new URL('./.tmp/evidence', import.meta.url)),
+  // Own throwaway signing key: labels minted by the suite can never verify against the dev or verification key.
+  AUTOQ_SIGNING_KEY_PATH: fileURLToPath(new URL('./.tmp/e2e-signing.key', import.meta.url)),
+  AUTOQ_SIGNING_KID: 'aq-e2e-1',
   CORS_ORIGINS: `http://localhost:${LIVE_PORT}`,
+  // Windows consoles default to a legacy code page; the seed log and API output are UTF-8.
+  PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
 }
 
 export default defineConfig({

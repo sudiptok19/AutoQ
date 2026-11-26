@@ -45,7 +45,15 @@ export interface LocalResult { decision: LocalDecision; reasons: Reason[]; check
  * On-device gate using only the signed snapshot. Its answer is PROVISIONAL: the snapshot can be stale
  * (new holds/recalls, other devices' scans), and seal state is never decided offline.
  */
-export async function decideLocally(token: string, snap: SnapPayload, queue: QueuedScan[], nowSec: number): Promise<LocalResult> {
+/** Did the server already count this entry when it computed a snapshot's remaining capacity? Only if the server
+ *  committed it before the snapshot was downloaded. Both times are this device's clock, so their ORDER is reliable:
+ *  an online decision commits before its response (≈ scanned_at); a provisional one commits at sync (synced_at). */
+export function reflectedIn(q: Pick<QueuedScan, 'local_decision' | 'scanned_at' | 'synced_at' | 'status'>, downloadedAtMs: number): boolean {
+  const committed = q.local_decision === 'ONLINE' ? (q.status === 'ACCEPTED' ? Date.parse(q.scanned_at) : NaN) : q.synced_at ? Date.parse(q.synced_at) : NaN
+  return Number.isFinite(committed) && committed < downloadedAtMs
+}
+
+export async function decideLocally(token: string, snap: SnapPayload, queue: QueuedScan[], nowSec: number, downloadedAtMs?: number): Promise<LocalResult> {
   const checks: GateCheck[] = [], reasons: Reason[] = []
   const fail = (gate: GateCheck['gate'], code: string, detail: string) => { checks.push({ gate, status: 'FAIL', detail }); reasons.push({ code, message: detail }) }
   const pass = (gate: GateCheck['gate'], detail: string) => checks.push({ gate, status: 'PASS', detail })
@@ -78,7 +86,10 @@ export async function decideLocally(token: string, snap: SnapPayload, queue: Que
       if (mine.some(q => q.package_id === p.id)) fail('DUPLICATE', 'ALREADY_SCANNED_LOCALLY', 'Already loaded via this device (online or provisional)')
       else checks.push({ gate: 'DUPLICATE', status: 'WARN', detail: 'No local duplicate — other devices unknown offline' })
       checks.push({ gate: 'SEAL', status: 'WARN', detail: 'Seal state not decidable offline — server checks on sync' })
-      const after = mine.reduce((n, q) => n + q.units, 0) + units
+      // Capacity: the snapshot's expected_units is what was LEFT when it was issued, so loads the server had already
+      // committed by then must not be counted again (a refreshed snapshot would otherwise double-count them).
+      const counted = downloadedAtMs === undefined ? mine : mine.filter(q => !reflectedIn(q, downloadedAtMs))
+      const after = counted.reduce((n, q) => n + q.units, 0) + units
       if (after > snap.expected_units) fail('QUANTITY', 'ORDER_QTY_EXCEEDED', `${after} > ${snap.expected_units} expected`)
       else pass('QUANTITY', `${after} / ${snap.expected_units} units (provisional)`)
     }

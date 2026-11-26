@@ -5,8 +5,10 @@ Safeguards (the e2e run must never touch a database someone cares about, e.g. a 
 - That database is dropped and recreated from scratch, so there is nothing in it to lose.
 - The API that Playwright starts runs with AUTOQ_E2E=1, which makes it refuse to boot against any other database,
   and the demo reset refuses too (scripts/seed_demo.py).
+- It signs with its own throwaway Ed25519 key (kid aq-e2e-1, created under e2e/.tmp), never the dev key.
 Run by e2e/playwright.config.ts before it starts the API; not meant to be run by hand.
 """
+import base64
 import os
 import sys
 from pathlib import Path
@@ -24,6 +26,13 @@ def main() -> None:
         sys.exit("refusing: AUTOQ_E2E=1 is not set (this script is for the Playwright suite only)")
     if problem := disposable_database_problem(url):
         sys.exit(f"refusing to prepare {url!r}: {problem}")
+    key = Path(os.environ.get("AUTOQ_SIGNING_KEY_PATH", ""))
+    if os.environ.get("AUTOQ_SIGNING_KID") != "aq-e2e-1" or "e2e" not in str(key):
+        sys.exit("refusing: the e2e API must sign with its own throwaway key (AUTOQ_SIGNING_KID=aq-e2e-1 under e2e/.tmp)")
+    if not key.exists():   # isolated signing: never the dev key that physical-verification labels were signed with
+        from nacl.signing import SigningKey
+        key.parent.mkdir(parents=True, exist_ok=True)
+        key.write_text(base64.urlsafe_b64encode(bytes(SigningKey.generate())).rstrip(b"=").decode())
     u = urlparse(url.replace("+psycopg", ""))
     name = u.path.lstrip("/")
     admin = u._replace(path="/postgres").geturl()
@@ -38,7 +47,7 @@ def main() -> None:
     cfg.attributes["database_url"] = url
     command.upgrade(cfg, "head")
     from scripts import seed_demo
-    sys.argv = ["seed_demo", "--reset"]
+    sys.argv = ["seed_demo", "--reset", "--scanner-dock"]
     seed_demo.main()
     print(f"e2e database {name!r} ready")
 

@@ -491,12 +491,11 @@ class Device(Base):
     last_seq: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     head_hash: Mapped[str] = mapped_column(String(64), server_default=text("repeat('0', 64)"))
     registered_at: Mapped[datetime] = mapped_column(Ts, server_default=now)
-    # Last moment the server knew this device had nothing unsynced: a sync, or a snapshot download reporting an empty queue.
-    checked_in_at: Mapped[datetime | None] = mapped_column(Ts)
 
 
 class OfflineSnapshot(Base):
     __tablename__ = "offline_snapshots"
+    __table_args__ = (CheckConstraint("settlement IS NULL OR settlement IN ('ACKNOWLEDGED', 'SUPERSEDED', 'RECOVERED', 'LEGACY')", name="ck_offline_snapshots_settlement"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
     shipment_id: Mapped[str] = mapped_column(ForeignKey("shipments.id"))
@@ -505,6 +504,12 @@ class OfflineSnapshot(Base):
     token: Mapped[str] = mapped_column(Text)
     issued_at: Mapped[datetime] = mapped_column(Ts)
     expires_at: Mapped[datetime] = mapped_column(Ts)
+    # Outstanding until settled; expiry settles nothing (events captured under it may still be on the phone).
+    settled_at: Mapped[datetime | None] = mapped_column(Ts)
+    settlement: Mapped[str | None] = mapped_column(String(12))          # ACKNOWLEDGED | SUPERSEDED | RECOVERED | LEGACY (pre-0004)
+    settled_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    settled_seq: Mapped[int | None] = mapped_column(Integer)            # device chain head when settled
+    settlement_reason: Mapped[str | None] = mapped_column(Text)
 
 
 class DeviceEvent(Base):
@@ -515,7 +520,8 @@ class DeviceEvent(Base):
     client_event_id: Mapped[str] = mapped_column(String(80), unique=True)
     prev_hash: Mapped[str] = mapped_column(String(64))
     hash: Mapped[str] = mapped_column(String(64))
-    snapshot_id: Mapped[str | None] = mapped_column(ForeignKey("offline_snapshots.id"))
+    snapshot_id: Mapped[str | None] = mapped_column(ForeignKey("offline_snapshots.id"))   # validated association only
+    claimed_snapshot_id: Mapped[str | None] = mapped_column(String(40))                   # what the device sent, verbatim
     scan_id: Mapped[str | None] = mapped_column(ForeignKey("scans.id"))
     local_decision: Mapped[str] = mapped_column(String(20))
     outcome: Mapped[str] = mapped_column(String(10))

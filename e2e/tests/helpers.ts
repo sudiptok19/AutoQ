@@ -7,7 +7,8 @@ const NAMES: Record<DevUser, string> = { 'op.ravi': 'Ravi Kumar', 'qe.ananya': '
 export async function signIn(page: Page, user: DevUser, path = '/') {
   await page.goto('/')
   await page.getByRole('button', { name: new RegExp(user.replace('.', '\\.')) }).click()
-  await expect(page.locator('header').getByText(NAMES[user], { exact: true })).toBeVisible()
+  // Attached, not visible: at phone width the header hides the name.
+  await expect(page.locator('header').getByText(NAMES[user], { exact: true })).toBeAttached()
   if (path !== '/') await page.goto(path)
 }
 
