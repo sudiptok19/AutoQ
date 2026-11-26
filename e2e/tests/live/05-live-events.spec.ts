@@ -29,3 +29,29 @@ test('the siren can be muted, and the choice survives a reload', async ({ page }
   await page.reload()
   await expect(page.getByRole('button', { name: 'Unmute alert siren' })).toBeVisible()
 })
+
+test('a critical alert raised while the control room was closed is shown when it reconnects', async ({ browser }) => {
+  const ctx = await browser.newContext()
+  let room = await ctx.newPage()
+  await signIn(room, 'qm.farhan', '/')
+  await expect(room.getByText('LIVE', { exact: true })).toBeVisible()      // cursor starts now for this user in this browser
+  await room.close()                                                         // nobody is watching
+
+  const dock = await (await browser.newContext()).newPage()
+  await signIn(dock, 'disp.kiran', '/dispatch')
+  await selectByPrefix(dock.getByRole('combobox').first(), 'SHP-0004')
+  const paste = dock.getByPlaceholder('Paste any AQ1.… token')
+  await paste.fill('AQ1.forged-while-away')
+  await paste.press('Enter')
+  await expect(dock.getByText('LOAD BLOCKED')).toBeVisible()
+
+  room = await ctx.newPage()                                                 // same browser, later
+  await room.goto('/')
+  const toast = room.getByRole('alert').filter({ hasText: 'Counterfeit label suspected' })
+  await expect(toast).toBeVisible()
+  await expect(toast).toContainText('WHILE DISCONNECTED')
+  await room.reload()                                                        // shown once, not again on every visit
+  await expect(room.getByText('LIVE', { exact: true })).toBeVisible()
+  await room.waitForTimeout(1500)
+  await expect(room.getByRole('alert').filter({ hasText: 'Counterfeit label suspected' })).toHaveCount(0)
+})

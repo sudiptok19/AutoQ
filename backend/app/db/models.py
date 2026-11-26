@@ -99,6 +99,7 @@ class WsTicket(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     expires_at: Mapped[datetime] = mapped_column(Ts)
     used_at: Mapped[datetime | None] = mapped_column(Ts)
+    session_expires_at: Mapped[datetime | None] = mapped_column(Ts)   # the socket closes when the minting session would
 
 
 class SigningKey(Base):
