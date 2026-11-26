@@ -78,6 +78,60 @@ class PgPorts:
                                "message": (a.details or {}).get("message") if a else None, "created_at": w.created_at.isoformat()})
         return points, base, rule, alerts
 
+    # ── A3 containment review (Opus reads; Astra's pure functions decide) ──
+    def load_spc_investigation_inputs(self, db: Session, target_inspection_id: str, principal: Principal):
+        """The chart context of the target inspection and the committed inspection prefix for that part/station/method,
+        in inspection record order. Every field is read from stored records; nothing is inferred."""
+        from app.features.spc.service import InvestigationContext, InvestigationObservation
+        target = db.get(m.Inspection, target_inspection_id)
+        if not target:
+            raise ApiError(404, "INSPECTION_NOT_FOUND", "Inspection not found")
+        prof = db.get(m.InspectionProfile, target.profile_id) if target.profile_id else None
+        if not prof or not prof.reference_sha256:
+            raise ApiError(409, "SPC_CONTEXT_UNAVAILABLE", "The target inspection has no calibrated reference identity to investigate against")
+        part_id = db.get(m.Unit, target.unit_id).part_id
+        ctx = InvestigationContext(part_id=part_id, station_id=target.station_id, method_version=target.method_version,
+                                   profile_id=prof.id, reference_sha256=prof.reference_sha256)
+        rows = db.scalars(select(m.Inspection).join(m.Unit, m.Unit.id == m.Inspection.unit_id)
+                          .where(m.Unit.part_id == part_id, m.Inspection.station_id == target.station_id,
+                                 m.Inspection.method_version == target.method_version,
+                                 (m.Inspection.created_at < target.created_at) | ((m.Inspection.created_at == target.created_at) & (m.Inspection.id <= target.id)))
+                          .order_by(m.Inspection.created_at, m.Inspection.id)).all()
+        unit_ids = {r.unit_id for r in rows}
+        # A unit's routine inspection is its first one anywhere; any later one is a reinspection.
+        first = {}
+        for uid, iid in db.execute(select(m.Inspection.unit_id, m.Inspection.id).where(m.Inspection.unit_id.in_(unit_ids))
+                                   .order_by(m.Inspection.created_at, m.Inspection.id)):
+            first.setdefault(uid, iid)
+        profiles = {pr.id: pr for pr in db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.id.in_({r.profile_id for r in rows if r.profile_id})))}
+        live = set(db.scalars(select(m.Evidence.sha256).where(m.Evidence.sha256.in_({r.image_sha256 for r in rows}),
+                                                               m.Evidence.evidence_source == "LIVE_CAPTURE")))
+        events = []
+        for r in rows:
+            pr = profiles.get(r.profile_id)
+            src = r.evidence_source if r.evidence_source in ("LIVE_CAPTURE", "PRERECORDED_EVAL", "SYNTHETIC_TEST") else None
+            events.append(InvestigationObservation(
+                observation_id=f"obs:{r.id}", inspection_id=r.id, unit_id=r.unit_id, t=r.created_at, score=r.raw_score,
+                profile_id=r.profile_id, reference_sha256=pr.reference_sha256 if pr else None, calibrated=bool((r.analysis or {}).get("calibrated")),
+                evidence_source=src, provenance_verified=src == "LIVE_CAPTURE" and r.image_sha256 in live, routine=first.get(r.unit_id) == r.id))
+        _, _, rule, _ = spc_inputs(db, part_id, target.station_id, target.method_version)
+        return ctx, events, rule
+
+    def load_spc_containment_genealogy(self, db: Session, investigation, principal: Principal):
+        """Bounded, recorded genealogy for the chart's part: lots (with recorded part and line), unit→lot rows, and the
+        chart line's 4M records as leads. No exposure links are asserted: none are recorded as independent evidence."""
+        from app.features.spc.service import ContainmentGenealogy, FourMChange, LotGenealogy, UnitGenealogy
+        ctx = investigation.context
+        line = db.scalars(select(m.Line).where(m.Line.station_id == ctx.station_id).order_by(m.Line.id)).first()
+        lots = db.scalars(select(m.Lot).where(m.Lot.part_id == ctx.part_id).order_by(m.Lot.id)).all()
+        units = db.execute(select(m.Unit.id, m.Unit.lot_id).where(m.Unit.lot_id.in_([lt.id for lt in lots])).order_by(m.Unit.id)).all()
+        fm = db.scalars(select(m.FourMEvent).where(m.FourMEvent.line_id == line.id).order_by(m.FourMEvent.effective_at)).all() if line else []
+        return ContainmentGenealogy(
+            line_id=line.id if line else None,
+            lots=tuple(LotGenealogy(lot_id=lt.id, part_id=lt.part_id, line_id=lt.line_id) for lt in lots),
+            units=tuple(UnitGenealogy(unit_id=u, lot_id=lt) for u, lt in units),
+            four_m=tuple(FourMChange(event_id=f.id, line_id=f.line_id, effective_at=f.effective_at, category=f.category) for f in fm))
+
     # ── reports (report-workflow slice) ──
     def load_snapshot(self, db: Session, report_id: str, principal: Principal) -> ReportSnapshot:
         from app.features.report_workflow.service import load_snapshot

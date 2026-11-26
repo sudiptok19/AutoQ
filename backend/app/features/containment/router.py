@@ -65,3 +65,50 @@ def run(run_id: str, db: Session = Depends(get_db), _: Principal = Depends(curre
 @router.post("/containments/{run_id}/clear")
 def clear(run_id: str, body: ClearIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_manager"))) -> dict:
     return s.clear(db, p, run_id, body.reason)
+
+
+# ── A3: SPC containment reviews (Astra's recommendation, Opus storage + human approval) ──
+from typing import Literal  # noqa: E402
+
+from app.features.containment import spc_review  # noqa: E402
+
+
+class SpcReviewIn(BaseModel):
+    inspection_id: str
+    alert_id: str | None = None
+
+
+class SpcDecisionIn(BaseModel):
+    decision: Literal["APPROVE", "REJECT"]
+    reason: str = Field(min_length=10, max_length=2000)
+    lot_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class SpcQuarantineIn(BaseModel):
+    lot_id: str
+
+
+@router.post("/spc-reviews", status_code=201)
+def create_spc_review(body: SpcReviewIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_engineer", "quality_manager"))) -> dict:
+    """Run Astra's investigation + recommendation for an inspection (usually a drift alert's) and freeze the result."""
+    return spc_review.create(db, p, body.inspection_id, body.alert_id)
+
+
+@router.get("/spc-reviews")
+def list_spc_reviews(db: Session = Depends(get_db), _: Principal = Depends(current_principal)) -> dict:
+    return {"items": spc_review.list_reviews(db)}
+
+
+@router.get("/spc-reviews/{review_id}")
+def get_spc_review(review_id: str, db: Session = Depends(get_db), _: Principal = Depends(current_principal)) -> dict:
+    return spc_review.get(db, review_id)
+
+
+@router.post("/spc-reviews/{review_id}/decision")
+def decide_spc_review(review_id: str, body: SpcDecisionIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_manager"))) -> dict:
+    return spc_review.decide(db, p, review_id, body.decision, body.reason, body.lot_ids)
+
+
+@router.post("/spc-reviews/{review_id}/quarantine")
+def quarantine_spc_lot(review_id: str, body: SpcQuarantineIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_manager"))) -> dict:
+    return spc_review.quarantine(db, p, review_id, body.lot_id)
