@@ -683,6 +683,9 @@ r('GET', '/offline/snapshot', async c => {
   const token = await sign({ typ: 'SNAP', id: nextId('snap'), exp: Math.floor(Date.now() / 1000) + ttl, shipment: s.id, order: s.order_id, expected_units: remainingQty(s), allowed_packages: allowed, held, revoked_kids: S.keys.filter(k => k.status === 'REVOKED').map(k => k.kid), keys: S.keys.filter(k => k.status !== 'REVOKED').map(k => ({ kid: k.kid, public_key: k.public_key })) })
   return { token }
 })
+// Settlement/recovery are enforced by the live backend; the mock accepts them so the scanner flow works offline-only.
+r('POST', '/offline/snapshots/:id/settle', c => { need(c, 'dispatcher'); return { snapshot_id: c.params[0], settlement: 'ACKNOWLEDGED' } })
+r('POST', '/offline/snapshots/:id/recover', c => { need(c, 'quality_manager'); return { snapshot_id: c.params[0], settlement: 'RECOVERED' } })
 r('POST', '/sync/scans', async c => {
   const user = need(c, 'dispatcher')
   const results = []

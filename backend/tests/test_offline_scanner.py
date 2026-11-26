@@ -121,8 +121,8 @@ def test_device_bound_to_operator_and_close_blocks_unsynced(client, auth, db):
     scan(client, auth, shp["id"], a["token"], "c1"); scan(client, auth, shp["id"], b["token"], "c2")
     r = client.post(f"{API}/shipments/{shp['id']}/close", json={"unsynced_offline_events": 2}, headers=auth("disp.kiran"))
     codes = [b["code"] for b in r.json()["error"]["details"]["blockers"]]
-    assert r.status_code == 409 and codes == ["PROVISIONAL_PENDING", "DEVICE_SYNC_PENDING"]   # dev-a1 holds a snapshot, never synced
-    assert sync(client, auth, "dev-a1", None, []).json()["chain"]["ok"] is True                 # an empty sync is a check-in
+    assert r.status_code == 409 and codes == ["PROVISIONAL_PENDING", "SNAPSHOT_UNSETTLED"]   # dev-a1 still holds its authorization
+    settle_all(client, auth, shp["id"], "dev-a1")
     assert client.post(f"{API}/shipments/{shp['id']}/close", headers=auth("disp.kiran")).json()["status"] == "CLOSED"
 
 
@@ -190,21 +190,9 @@ def test_lost_sync_response_still_returns_the_unload_instruction(client, auth, d
     assert again["segregation_task_id"] == first["segregation_task_id"] and again["segregation_task_status"] == "OPEN"
 
 
-def test_close_waits_for_devices_holding_a_live_snapshot(client, auth, db):
-    _, _, _, a, b, shp = setup(client, auth, db)
-    from tests.test_dispatch import scan
-    scan(client, auth, shp["id"], a["token"], "c1"); scan(client, auth, shp["id"], b["token"], "c2")
-    sid = snap(client, auth, shp["id"], "dev-a1").json()["snapshot_id"]
-    view = client.get(f"{API}/shipments/{shp['id']}", headers=auth("disp.kiran")).json()
-    assert [d["snapshot_id"] for d in view["offline_devices_not_synced"]] == [sid]
-    blocked = client.post(f"{API}/shipments/{shp['id']}/close", headers=auth("disp.kiran"))
-    assert blocked.status_code == 409 and blocked.json()["error"]["details"]["blockers"][0]["code"] == "DEVICE_SYNC_PENDING"
-    # The scanner's automatic refresh reports an empty queue at the server head: that is a check-in, not a pending device.
-    snap_params = {"shipment_id": shp["id"], "device_id": "dev-a1", "local_seq": 0, "pending": 0}
-    assert client.get(f"{API}/offline/snapshot", params=snap_params, headers=auth("disp.kiran")).status_code == 200
-    assert client.get(f"{API}/shipments/{shp['id']}", headers=auth("disp.kiran")).json()["offline_devices_not_synced"] == []
-    # A refresh that admits pending events (or a stale head) is not.
-    client.get(f"{API}/offline/snapshot", params=snap_params | {"pending": 1}, headers=auth("disp.kiran"))
-    assert len(client.get(f"{API}/shipments/{shp['id']}", headers=auth("disp.kiran")).json()["offline_devices_not_synced"]) == 1
-    sync(client, auth, "dev-a1", None, [])
-    assert client.post(f"{API}/shipments/{shp['id']}/close", headers=auth("disp.kiran")).json()["status"] == "CLOSED"
+def settle_all(client, auth, shp_id, device, who="disp.kiran", seq=0):
+    view = client.get(f"{API}/shipments/{shp_id}", headers=auth(who)).json()
+    for o in view["offline_authorizations_open"]:
+        if o["device_id"] == device:
+            r = client.post(f"{API}/offline/snapshots/{o['snapshot_id']}/settle", json={"device_id": device, "local_seq": seq, "pending": 0}, headers=auth(who))
+            assert r.status_code == 200, r.text

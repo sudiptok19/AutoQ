@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { pickFixture, signIn } from '../helpers'
+import { pickFixture, selectByPrefix, signIn } from '../helpers'
 
 const crate = (page: Page, label: string) => page.getByTestId(`crate-${label}`)
 const verdict = (page: Page) => page.getByText(/^LOAD (ACCEPTED|BLOCKED)$/)
@@ -8,7 +8,8 @@ test.describe.configure({ mode: 'serial' })
 
 test.beforeEach(async ({ page }) => {
   await signIn(page, 'disp.kiran', '/dispatch')
-  await expect(page.getByRole('combobox').first().locator('option:checked')).toHaveText(/^SHP-0004/)   // default: the first OPEN shipment
+  await selectByPrefix(page.getByRole('combobox').first(), 'SHP-0004')   // the dock story's shipment (the e2e seed adds SHP-0005 for the phone spec)
+  await expect(page.getByText(/WB-25-K-4471/)).toBeVisible()
 })
 
 test('a package with only its enrollment photo is refused until the seal is rechecked', async ({ page }) => {

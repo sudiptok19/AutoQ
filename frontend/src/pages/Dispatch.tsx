@@ -3,8 +3,8 @@ import { Camera, CheckCircle2, ClipboardPaste, Lock, QrCode, Repeat, ShieldX, Tr
 import { useAct, useGet } from '../api/hooks'
 import { api } from '../api/client'
 import { useAuth } from '../auth/auth'
-import type { Order, Package, ScanDecision, SealCheck, Shipment, Unit } from '../api/types'
-import { Button, Card, CardHeader, Empty, ErrorBox, Honesty, Input, Modal, Mono, PageHeader, Pill, Select, Status, ago, cx, fmtTime, toneVar } from '../components/ui'
+import type { OfflineAuthorization, Order, Package, ScanDecision, SealCheck, SegregationTask, Shipment, Unit } from '../api/types'
+import { Button, Card, CardHeader, Empty, ErrorBox, Field, Honesty, Input, Modal, Mono, PageHeader, Pill, Select, Status, Textarea, ago, cx, fmtTime, toneVar } from '../components/ui'
 import { forgeToken } from '../lib/token'
 import { GateChecklist, ImageCapture, Reasons, SEAL_FIXTURES, type Captured } from '../components/domain'
 
@@ -40,6 +40,58 @@ function SealRecheck({ pkg, onClose }: { pkg: PkgView; onClose: () => void }) {
       )}
       <div className="text-[11px] text-muted">Visual similarity is evidence, not proof the package was never opened. Bad captures fail safe to UNVERIFIABLE.</div>
     </div>
+  )
+}
+
+/** What still stands between this shipment and the road besides the gate: phones holding an offline authorization,
+ *  and unload/segregate orders without a recorded disposition. Close and departure refuse until both lists are empty. */
+function Reconciliation({ ship }: { ship: ShipView }) {
+  const { can } = useAuth()
+  const auths = ship.offline_authorizations_open ?? [], tasks = ship.open_physical_tasks ?? []
+  const [recovering, setRecovering] = useState<OfflineAuthorization | null>(null)
+  const [doing, setDoing] = useState<SegregationTask | null>(null)
+  const [reason, setReason] = useState('')
+  const recover = useAct(() => api.post(`/offline/snapshots/${recovering!.snapshot_id}/recover`, { reason }))
+  const done = useAct(() => api.post(`/segregation-tasks/${doing!.id}/complete`, { reason }))
+  if (!auths.length && !tasks.length) return null
+  const reset = () => { setRecovering(null); setDoing(null); setReason(''); recover.reset(); done.reset() }
+  return (
+    <Card className="mb-6 border-hold/40">
+      <CardHeader eyebrow="Before the truck leaves" title="Open offline authorizations and physical tasks" />
+      <ul className="divide-y divide-line">
+        {auths.map(a => (
+          <li key={a.snapshot_id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-[12.5px]">
+            <Pill tone="prov">OFFLINE</Pill><Mono>{a.device_id}</Mono><span className="text-muted">{a.operator} · issued {ago(a.issued_at)}</span>
+            {a.expired && <Pill tone="hold">expired · captures may still be on the phone</Pill>}
+            <span className="ml-auto text-[11.5px] text-muted">End the offline session on the phone, or</span>
+            <Button size="sm" disabled={!can('quality_manager')} onClick={() => { reset(); setRecovering(a) }}>Recover lost device…</Button>
+          </li>
+        ))}
+        {tasks.map(t => (
+          <li key={t.id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-[12.5px]">
+            <Pill tone="reject">{t.type === 'REMOVAL_REQUIRED' ? 'UNLOAD' : 'SEGREGATE'}</Pill><Mono>{t.package_label ?? 'unidentified crate'}</Mono>
+            <span className="min-w-0 flex-1 truncate text-muted" title={t.reason}>{t.reason}</span>
+            <Button size="sm" disabled={!can('dispatcher', 'quality_engineer', 'quality_manager')} onClick={() => { reset(); setDoing(t) }}>Record disposition…</Button>
+          </li>
+        ))}
+      </ul>
+      <Modal open={!!recovering} onClose={reset} title={`Recover ${recovering?.device_id}`}>
+        <div className="space-y-3">
+          <div className="rounded-lg bg-hold/10 px-3 py-2 text-[12px] text-ink-2">Use only when the phone is lost or unavailable. Nothing it captured is assumed synced: if it turns up later, every provisional load it made becomes a conflict that needs physical verification.</div>
+          <Field label="Reason (audit, required)"><Textarea value={reason} onChange={e => setReason(e.target.value)} className="min-h-14" placeholder="e.g. Phone dropped and broken at Dock 3; dispatcher re-counted the truck by hand" /></Field>
+          {recover.error && <ErrorBox error={recover.error} />}
+          <Button variant="danger" className="w-full" disabled={reason.trim().length < 10} loading={recover.isPending} onClick={() => recover.mutate(undefined, { onSuccess: reset })}>Recover and settle authorization</Button>
+        </div>
+      </Modal>
+      <Modal open={!!doing} onClose={reset} title={`Disposition · ${doing?.package_label ?? 'crate'}`}>
+        <div className="space-y-3">
+          <div className="text-[12.5px] text-ink-2">{doing?.reason}</div>
+          <Field label="What was physically done (audit)"><Textarea value={reason} onChange={e => setReason(e.target.value)} className="min-h-14" placeholder="e.g. Crate pulled from the truck and tagged red in quarantine cage Q2" /></Field>
+          {done.error && <ErrorBox error={done.error} />}
+          <Button variant="primary" className="w-full" disabled={!reason.trim()} loading={done.isPending} onClick={() => done.mutate(undefined, { onSuccess: reset })}>Record disposition</Button>
+        </div>
+      </Modal>
+    </Card>
   )
 }
 
@@ -142,6 +194,7 @@ export default function Dispatch() {
         </Card>
       )}
 
+      {ship && <Reconciliation ship={ship} />}
       <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
         <div className="space-y-6">
           <Card>
