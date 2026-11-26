@@ -92,3 +92,22 @@ describe('capacity after a refreshed snapshot (P1)', () => {
     expect(reflectedIn(q({ local_decision: 'ONLINE', status: 'PENDING', scanned_at: '2026-11-26T10:04:00Z' }), dl)).toBe(false)   // lost response: unknown
   })
 })
+
+describe('chain writer rollout (A4)', () => {
+  it('moves the writer only upward, only to supported versions, and flags a build below the floor', async () => {
+    const { applyChainPolicy, chainWriter } = await import('./store')
+    expect(await applyChainPolicy({ writer_version: 1, min_version: 1 })).toEqual({ writer: 1, outdated: false })
+    expect(await applyChainPolicy({ writer_version: 2, min_version: 1 })).toEqual({ writer: 2, outdated: false })
+    expect(await applyChainPolicy({ writer_version: 1, min_version: 1 })).toEqual({ writer: 2, outdated: false })   // never back down
+    expect(await applyChainPolicy({ writer_version: 3, min_version: 3 })).toEqual({ writer: 2, outdated: true })    // a future floor
+    expect(await chainWriter()).toBe(2)
+  })
+  it('appends v2 entries that hash the capture snapshot, null for online scans', async () => {
+    const online = await appendScan({ token: 't_on', shipment_id: 'shp_1', scanned_at: '2026-11-27T10:00:00Z', local_decision: 'ONLINE', local_reasons: [], local_checks: [], package_id: null, package_label: null, units: 0, status: 'PENDING' })
+    const off = await appendScan({ token: 't_off', shipment_id: 'shp_1', scanned_at: '2026-11-27T10:01:00Z', local_decision: 'PROVISIONAL_ACCEPT', local_reasons: [], local_checks: [], package_id: 'p', package_label: 'P', units: 1, status: 'PENDING', snapshot_id: 'snap_1' })
+    expect([online.chain_version, online.snapshot_id, off.chain_version, off.snapshot_id]).toEqual([2, null, 2, 'snap_1'])
+    expect(chainHash(online.prev_hash, online)).toBe(online.hash)
+    // (The shared fake IndexedDB still holds the entry an earlier test tampered with, so verify just these two.)
+    expect(verifyChain([online, off], online.prev_hash)).toEqual({ ok: true, head: off.hash })
+  })
+})

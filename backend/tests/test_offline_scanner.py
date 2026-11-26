@@ -54,7 +54,7 @@ def test_sync_accepts_provisional_load_and_replay_is_idempotent(client, auth, db
     sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
     evs = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT"), (b["token"], shp["id"], "PROVISIONAL_ACCEPT")])
     r = sync(client, auth, "dev-a1", sid, evs).json()
-    assert [x["outcome"] for x in r["results"]] == ["ACCEPTED", "ACCEPTED"] and r["chain"] == {"ok": True, "server_head": evs[-1]["hash"], "server_seq": 2}
+    assert [x["outcome"] for x in r["results"]] == ["ACCEPTED", "ACCEPTED"] and {k: r["chain"][k] for k in ("ok", "server_head", "server_seq")} == {"ok": True, "server_head": evs[-1]["hash"], "server_seq": 2}
     assert r["results"][0]["scan"]["offline"] is True
     again = sync(client, auth, "dev-a1", sid, evs).json()
     assert [x["outcome"] for x in again["results"]] == ["DUPLICATE", "DUPLICATE"] and [x["original_outcome"] for x in again["results"]] == ["ACCEPTED", "ACCEPTED"]
@@ -72,7 +72,8 @@ def test_broken_chain_and_gaps_advance_nothing(client, auth, db):
     r = sync(client, auth, "dev-a1", sid, evs).json()
     assert r["results"] == [] and r["chain"]["ok"] is False and r["chain"]["broken_at"] == 2 and r["chain"]["server_seq"] == 0
     gap = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")], start_seq=2)
-    assert sync(client, auth, "dev-a1", sid, gap).json()["chain"] == {"ok": False, "broken_at": 2, "server_head": GEN, "server_seq": 0}
+    chain = sync(client, auth, "dev-a1", sid, gap).json()["chain"]
+    assert {k: chain[k] for k in ("ok", "broken_at", "server_head", "server_seq")} == {"ok": False, "broken_at": 2, "server_head": GEN, "server_seq": 0}
     assert db.scalar(select(func.count()).select_from(m.Load)) == 0 and db.scalar(select(func.count()).select_from(m.DeviceEvent)) == 0
 
 
