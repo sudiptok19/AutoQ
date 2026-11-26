@@ -511,6 +511,11 @@ class OfflineSnapshot(Base):
     settled_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     settled_seq: Mapped[int | None] = mapped_column(Integer)            # device chain head when settled
     settlement_reason: Mapped[str | None] = mapped_column(Text)
+    settled_head: Mapped[str | None] = mapped_column(String(64))         # device chain hash at settlement (with settled_seq)
+    # Lost device: recovery is REQUESTED (offline authority ends) and settles only with physical reconciliation.
+    recovery_requested_at: Mapped[datetime | None] = mapped_column(Ts)
+    recovery_task_id: Mapped[str | None] = mapped_column(ForeignKey("segregation_tasks.id"))
+    recovery_evidence: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
 
 
 class DeviceEvent(Base):
@@ -523,6 +528,7 @@ class DeviceEvent(Base):
     hash: Mapped[str] = mapped_column(String(64))
     snapshot_id: Mapped[str | None] = mapped_column(ForeignKey("offline_snapshots.id"))   # validated association only
     claimed_snapshot_id: Mapped[str | None] = mapped_column(String(40))                   # what the device sent, verbatim
+    claim_recorded: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))   # false = pre-0006 row, claim unknown
     scan_id: Mapped[str | None] = mapped_column(ForeignKey("scans.id"))
     local_decision: Mapped[str] = mapped_column(String(20))
     outcome: Mapped[str] = mapped_column(String(10))
@@ -564,7 +570,7 @@ class RecallHold(Base):
 class SegregationTask(Base):
     __tablename__ = "segregation_tasks"
     __table_args__ = (
-        _enum("type", "REMOVAL_REQUIRED", "SEGREGATION_REQUIRED", "IN_TRANSIT_RECALL", "NOTIFY_CUSTOMER"),
+        _enum("type", "REMOVAL_REQUIRED", "SEGREGATION_REQUIRED", "IN_TRANSIT_RECALL", "NOTIFY_CUSTOMER", "DEVICE_RECONCILIATION"),
         _enum("status", "OPEN", "COMPLETED"),
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)

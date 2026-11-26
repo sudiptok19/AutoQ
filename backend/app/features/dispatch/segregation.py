@@ -16,6 +16,7 @@ from app.db.locking import lock_set
 ACTION = {"REMOVAL_REQUIRED": "Physically unload and segregate the package before departure",
           "SEGREGATION_REQUIRED": "Offline-staged load rejected on sync: segregate the package",
           "IN_TRANSIT_RECALL": "Contact carrier/consignee: intercept and quarantine on arrival",
+          "DEVICE_RECONCILIATION": "Physically reconcile the truck and staging lane against the manifest",
           "NOTIFY_CUSTOMER": "Notify the consignee and arrange return or containment"}
 
 
@@ -67,7 +68,7 @@ def complete(db: Session, p: Principal, task_id: str, reason: str) -> dict:
     # With the package locked no load can appear or move; lock every shipment involved, in id order.
     load = db.scalars(select(m.Load).where(m.Load.package_id == pkg.id, m.Load.removed_at.is_(None))).first() if pkg else None
     locks.lock(m.Shipment, [x for x in {t0.shipment_id, load.shipment_id if load else None} if x])
-    t = db.scalars(select(m.SegregationTask).where(m.SegregationTask.id == task_id).with_for_update()).one()
+    t = db.scalars(select(m.SegregationTask).where(m.SegregationTask.id == task_id).with_for_update().execution_options(populate_existing=True)).one()
     if t.status != "OPEN":
         raise ApiError(409, "TASK_COMPLETED", "Task already completed")
     now = datetime.now(UTC)
@@ -86,7 +87,12 @@ def complete(db: Session, p: Principal, task_id: str, reason: str) -> dict:
                 raise ApiError(409, "LOCATION_CONFLICT_REVIEW", f"{pkg.label} is recorded as loaded on {elsewhere.code} by another accepted scan. "
                                "A quality engineer must verify where the crate physically is; that load is not changed by this task.",
                                {"package": pkg.label, "recorded_on": elsewhere.code, "task_shipment_id": t.shipment_id})
+    if t.type == "DEVICE_RECONCILIATION" and not p.has("quality_engineer", "quality_manager"):
+        raise ApiError(403, "ROLE_FORBIDDEN", "A lost device's physical reconciliation is signed off by a quality engineer or manager")
     t.status, t.completed_by, t.completed_at, t.completion_reason = "COMPLETED", p.id, now, reason
+    if t.type == "DEVICE_RECONCILIATION":
+        from app.features.offline_scanner.service import complete_recovery   # (circular at import time)
+        complete_recovery(db, p, t, now)
     db.flush()
     data = {"type": t.type, "unloaded": unloaded}
     if elsewhere:
