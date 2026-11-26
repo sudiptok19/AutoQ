@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe as group, expect, it, vi } from 'vitest'
-import { Seen, backoff, connect, describe, eventsUrl, type PlantEvent } from './events'
+import { OVERLAP_MS, Seen, advance, backoff, catchUpFrom, connect, describe, eventsUrl, loadCursor, saveCursor, type PlantEvent } from './events'
 
 const ev = (o: Partial<PlantEvent>): PlantEvent => ({
   event_id: 'evt_1', type: 'DISPATCH_STATE_CHANGED', severity: 'INFO', audible_siren: false, entity_type: 'SHIPMENT', entity_id: 's1',
@@ -47,7 +47,7 @@ group('Seen / backoff / url', () => {
 
 class FakeSocket {
   static all: FakeSocket[] = []
-  onopen?: () => void; onmessage?: (m: { data: string }) => void; onclose?: () => void
+  onopen?: () => void; onmessage?: (m: { data: string }) => void; onclose?: (e?: { code?: number; reason?: string }) => void
   closed = false
   constructor(public url: string) { FakeSocket.all.push(this) }
   close() { this.closed = true; this.onclose?.() }
@@ -60,10 +60,11 @@ group('connect', () => {
 
   const setup = () => {
     let n = 0
-    const log = { status: [] as string[], events: [] as string[], syncs: 0 }
+    const log = { status: [] as string[], events: [] as string[], syncs: 0, authClosed: [] as string[] }
     const stop = connect({
       ticket: async () => `t${++n}`, url: t => `ws://x/ws/events?ticket=${t}`, open: u => new FakeSocket(u) as unknown as WebSocket,
       onStatus: s => log.status.push(s), onEvent: e => log.events.push(e.event_id), onSync: () => log.syncs++,
+      onAuthClosed: r => log.authClosed.push(r),
     })
     return { log, stop }
   }
@@ -101,5 +102,61 @@ group('connect', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(FakeSocket.all).toHaveLength(1)
     expect(log.status).not.toContain('offline')
+  })
+})
+
+
+group('authorization close (P2)', () => {
+  beforeEach(() => { vi.useFakeTimers(); FakeSocket.all = [] })
+  afterEach(() => vi.useRealTimers())
+  it('asks the app to re-verify the user, then reconnects with a fresh ticket', async () => {
+    let n = 0
+    const reasons: string[] = []
+    connect({ ticket: async () => `t${++n}`, url: t => `ws://x?ticket=${t}`, open: u => new FakeSocket(u) as unknown as WebSocket,
+      onStatus: () => {}, onEvent: () => {}, onSync: () => {}, onAuthClosed: r => reasons.push(r) })
+    await vi.runAllTicks()
+    FakeSocket.all[0].onopen!()
+    FakeSocket.all[0].onclose!({ code: 1008, reason: 'ROLES_CHANGED' })
+    FakeSocket.all[0].onclose!({ code: 1006, reason: '' })              // ignored: that socket is already retired
+    expect(reasons).toEqual(['ROLES_CHANGED'])
+    await vi.advanceTimersByTimeAsync(1300)
+    expect(FakeSocket.all[1].url).toContain('ticket=t2')
+  })
+  it('a plain network drop is not an authorization event', async () => {
+    const reasons: string[] = []
+    connect({ ticket: async () => 't', url: t => t, open: u => new FakeSocket(u) as unknown as WebSocket,
+      onStatus: () => {}, onEvent: () => {}, onSync: () => {}, onAuthClosed: r => reasons.push(r) })
+    await vi.runAllTicks()
+    FakeSocket.all[0].onclose!({ code: 1006 })
+    FakeSocket.all.length = 0
+    expect(reasons).toEqual([])
+  })
+})
+
+group('catch-up cursor (P2)', () => {
+  const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) } }
+  it('starts at "now" on a first visit, so nothing before it counts as missed', () => {
+    expect(loadCursor('qm', Date.parse('2026-11-26T10:00:00Z'), mem())).toEqual({ since: '2026-11-26T10:00:00.000Z', seen: [] })
+  })
+  it('advances to the newest event, never repeats one, and survives a reload', () => {
+    const store = mem()
+    const c = loadCursor('qm', Date.parse('2026-11-26T10:00:00Z'), store)
+    expect(advance(c, { event_id: 'e2', timestamp: '2026-11-26T10:05:00.000Z' })).toBe(true)
+    expect(advance(c, { event_id: 'e1', timestamp: '2026-11-26T10:04:00.000Z' })).toBe(true)   // late commit, earlier stamp
+    expect(advance(c, { event_id: 'e2', timestamp: '2026-11-26T10:05:00.000Z' })).toBe(false)
+    expect(c.since).toBe('2026-11-26T10:05:00.000Z')
+    saveCursor('qm', c, store)
+    const back = loadCursor('qm', Date.now(), store)
+    expect(back.seen).toEqual(['e2', 'e1'])
+    expect(advance(back, { event_id: 'e1', timestamp: '2026-11-26T10:04:00.000Z' })).toBe(false)
+  })
+  it('asks the server from a little before the cursor, to catch late-committing events', () => {
+    expect(Date.parse('2026-11-26T10:05:00.000Z') - Date.parse(catchUpFrom({ since: '2026-11-26T10:05:00.000Z', seen: [] }))).toBe(OVERLAP_MS)
+  })
+  it('is per user and tolerates corrupt storage', () => {
+    const store = mem(); store.setItem('autoq-events:qm', '{not json')
+    expect(loadCursor('qm', 0, store).seen).toEqual([])
+    saveCursor('op', { since: 'x', seen: ['a'] }, store)
+    expect(loadCursor('qm', 0, store).seen).toEqual([])
   })
 })
