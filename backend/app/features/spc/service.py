@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -506,3 +507,281 @@ def investigate(
     status = "INSUFFICIENT_EVIDENCE" if trigger is None else "SIGNAL" if rules else "NO_SIGNAL"
     return Investigation(context, target_inspection_id, status, InvestigationBaseline(baseline_status, stats, tuple(reference)),
                          rule, tuple(issues), trigger, rules, cusum, five_rising)
+
+
+CONTAINMENT_RECOMMENDATION_VERSION = "spc-containment-1"
+RecommendationAction = Literal["RECONCILE_GENEALOGY", "REVIEW_HISTORICAL_CONTAINMENT", "INVESTIGATE_ONGOING_EXPOSURE"]
+
+
+@dataclass(frozen=True)
+class LotGenealogy:
+    lot_id: str
+    part_id: str | None
+    line_id: str | None
+
+
+@dataclass(frozen=True)
+class UnitGenealogy:
+    unit_id: str
+    lot_id: str | None
+
+
+@dataclass(frozen=True)
+class ExposureEvidence:
+    evidence_id: str
+    basis: Literal["PROCESS_RECORD", "QUALITY_INVESTIGATION"]
+
+
+@dataclass(frozen=True)
+class LotExposureLink:
+    lot_id: str
+    evidence: ExposureEvidence
+
+
+@dataclass(frozen=True)
+class OngoingExposureLink:
+    part_id: str
+    line_id: str
+    evidence: ExposureEvidence
+
+
+@dataclass(frozen=True)
+class FourMChange:
+    event_id: str
+    line_id: str
+    effective_at: datetime
+    category: Literal["MAN", "MACHINE", "MATERIAL", "METHOD"]
+
+
+@dataclass(frozen=True)
+class ContainmentGenealogy:
+    """Opus supplies the resolved station-to-line mapping and a bounded genealogy read.
+
+    Null means unknown. Exposure links cite independently checked evidence of a shared
+    exposure. A date, common heat, nearby 4M record or PASS alone cannot establish a link.
+    FourM records are preselected investigation leads, and carry no exposure assertion.
+    """
+
+    line_id: str | None
+    lots: tuple[LotGenealogy, ...] = ()
+    units: tuple[UnitGenealogy, ...] = ()
+    lot_exposure: tuple[LotExposureLink, ...] = ()
+    ongoing_exposure: tuple[OngoingExposureLink, ...] = ()
+    four_m: tuple[FourMChange, ...] = ()
+
+
+@dataclass(frozen=True)
+class ConfirmedObservation:
+    observation_id: str
+    inspection_id: str
+    unit_id: str
+    rules: tuple[RuleName, ...]
+
+
+@dataclass(frozen=True)
+class ProposedLotReview:
+    lot_id: str
+    recorded_unit_ids: tuple[str, ...]
+    basis: tuple[Literal["SIGNAL_CONTRIBUTOR", "INDEPENDENT_EXPOSURE_LINK"], ...]
+    supporting_inspection_ids: tuple[str, ...]
+    independent_evidence: tuple[ExposureEvidence, ...]
+
+
+@dataclass(frozen=True)
+class ScopeFinding:
+    entity_type: Literal["UNIT", "LOT", "FOUR_M"]
+    entity_id: str
+    reason: Literal[
+        "UNIT_LOT_UNKNOWN", "UNIT_LOT_CONFLICT", "LOT_NOT_IN_ROSTER", "LOT_CONTEXT_UNKNOWN", "LOT_GENEALOGY_CONFLICT",
+        "LOT_EVIDENCE_CONTEXT_CONFLICT", "LOT_EXPOSURE_UNCONFIRMED", "OUTSIDE_CHART_PART_OR_LINE", "FOUR_M_RECORD_CONFLICT",
+    ]
+    recorded_lot_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ContainmentRecommendation:
+    target_inspection_id: str
+    context: InvestigationContext
+    line_id: str | None
+    investigation_status: Literal["SIGNAL", "NO_SIGNAL", "INSUFFICIENT_EVIDENCE"]
+    investigation_issues: tuple[InvestigationIssue, ...]
+    status: Literal["REVIEW_RECOMMENDED", "SCOPE_UNRESOLVED", "NO_SIGNAL", "INSUFFICIENT_EVIDENCE"]
+    confirmed_observations: tuple[ConfirmedObservation, ...] = ()
+    proposed_lots: tuple[ProposedLotReview, ...] = ()
+    unresolved: tuple[ScopeFinding, ...] = ()
+    excluded: tuple[ScopeFinding, ...] = ()
+    related_four_m: tuple[FourMChange, ...] = ()
+    ongoing_evidence: tuple[ExposureEvidence, ...] = ()
+    limitations: tuple[str, ...] = ("PRODUCTION_CHRONOLOGY_UNAVAILABLE", "TOTAL_EXPOSURE_UNKNOWN")
+    actions: tuple[RecommendationAction, ...] = ()
+    qualification_version: str = INVESTIGATION_QUALIFICATION_VERSION
+    recommendation_version: str = CONTAINMENT_RECOMMENDATION_VERSION
+
+
+def _confirmed_observations(investigation: Investigation) -> tuple[ConfirmedObservation, ...]:
+    observations: dict[str, InvestigationObservation] = {}
+    contribution: dict[str, set[RuleName]] = defaultdict(set)
+    evidence_by_rule: dict[RuleName, CusumEvidence | FiveRisingEvidence | None] = {
+        "CUSUM_UPPER": investigation.cusum, "FIVE_RISING": investigation.five_rising,
+    }
+    for rule in investigation.rules:
+        evidence = evidence_by_rule[rule]
+        if evidence is None:
+            raise _invalid("SPC_INPUT_INVALID", "Qualified investigation is missing the evidence for a triggered rule")
+        for measurement in evidence.contributors:
+            observation = measurement.observation
+            prior = observations.setdefault(observation.inspection_id, observation)
+            if observation != prior or observation.unit_id is None:
+                raise _invalid("SPC_INPUT_INVALID", "Qualified investigation contains inconsistent contributor identity")
+            contribution[observation.inspection_id].add(rule)
+    trigger = investigation.trigger
+    if trigger is None or trigger.observation.inspection_id != investigation.target_inspection_id or (
+        observations.get(investigation.target_inspection_id) != trigger.observation
+    ):
+        raise _invalid("SPC_INPUT_INVALID", "Qualified investigation is missing its triggering observation")
+    return tuple(
+        ConfirmedObservation(row.observation_id, row.inspection_id, cast(str, row.unit_id),
+                             tuple(rule for rule in investigation.rules if rule in contribution[row.inspection_id]))
+        for row in sorted(observations.values(), key=attrgetter("t", "inspection_id"))
+    )
+
+
+def _evidence_order(evidence: set[ExposureEvidence]) -> tuple[ExposureEvidence, ...]:
+    return tuple(sorted(evidence, key=attrgetter("evidence_id", "basis")))
+
+
+def _validate_genealogy(genealogy: ContainmentGenealogy, contextual_ids: set[str]) -> None:
+    required_ids = (
+        *(lot.lot_id for lot in genealogy.lots),
+        *(unit.unit_id for unit in genealogy.units),
+        *(link.lot_id for link in genealogy.lot_exposure),
+        *(value for link in genealogy.ongoing_exposure for value in (link.part_id, link.line_id)),
+        *(value for event in genealogy.four_m for value in (event.event_id, event.line_id)),
+    )
+    optional_ids = (
+        genealogy.line_id, *(value for lot in genealogy.lots for value in (lot.part_id, lot.line_id)),
+        *(unit.lot_id for unit in genealogy.units),
+    )
+    if not all(map(_has_id, required_ids)) or any(value is not None and not _has_id(value) for value in optional_ids):
+        raise _invalid("SPC_INPUT_INVALID", "Genealogy requires nonempty IDs. Only null denotes an unknown mapping.")
+    basis_by_id: dict[str, str] = {}
+    for link in (*genealogy.lot_exposure, *genealogy.ongoing_exposure):
+        evidence = link.evidence
+        if not _has_id(evidence.evidence_id) or evidence.basis not in ("PROCESS_RECORD", "QUALITY_INVESTIGATION"):
+            raise _invalid("SPC_INPUT_INVALID", "Independent exposure evidence requires a record ID and evidence basis")
+        if evidence.evidence_id in contextual_ids:
+            raise _invalid("SPC_INPUT_INVALID", "A chart inspection or 4M record alone cannot corroborate exposure")
+        if basis_by_id.setdefault(evidence.evidence_id, evidence.basis) != evidence.basis:
+            raise _invalid("SPC_INPUT_INVALID", "An independent exposure record has conflicting evidence bases")
+
+
+def recommend_containment(investigation: Investigation, genealogy: ContainmentGenealogy) -> ContainmentRecommendation:
+    """Propose a human review from PR #31 evidence and caller-supplied genealogy.
+
+    A recorded inspection confirms an observation, not a defective unit. Known
+    memberships support precautionary whole-lot review. The returned members
+    are a partial roster and neither inspection order nor 4M time bounds production.
+    """
+    status = "NO_SIGNAL" if investigation.status == "NO_SIGNAL" else "INSUFFICIENT_EVIDENCE"
+    result = ContainmentRecommendation(
+        investigation.target_inspection_id, investigation.context, genealogy.line_id, investigation.status,
+        investigation.issues, status, qualification_version=investigation.qualification_version,
+    )
+    if investigation.qualification_version != INVESTIGATION_QUALIFICATION_VERSION:
+        return replace(result, status="INSUFFICIENT_EVIDENCE",
+                       limitations=(*result.limitations, "INVESTIGATION_VERSION_UNSUPPORTED"))
+    if investigation.status != "SIGNAL":
+        return result
+    confirmed = _confirmed_observations(investigation)
+    _validate_genealogy(genealogy, {
+        *(row.inspection_id for row in confirmed), *(row.inspection_id for row in investigation.baseline.observations),
+        *(row.event_id for row in genealogy.four_m),
+    })
+    lot_records: dict[str, set[LotGenealogy]] = defaultdict(set)
+    memberships: dict[str, set[str | None]] = defaultdict(set)
+    related: dict[str, set[FourMChange]] = defaultdict(set)
+    independent: dict[str, set[ExposureEvidence]] = defaultdict(set)
+    for lot in genealogy.lots:
+        lot_records[lot.lot_id].add(lot)
+    for unit in genealogy.units:
+        memberships[unit.unit_id].add(unit.lot_id)
+    for event in genealogy.four_m:
+        related[event.event_id].add(replace(event, effective_at=_utc_time(event.effective_at, "SPC_INPUT_INVALID")))
+    for link in genealogy.lot_exposure:
+        independent[link.lot_id].add(link.evidence)
+
+    unresolved, excluded, proposed = [], [], []
+    members: dict[str, list[str]] = defaultdict(list)
+    observed: dict[str, set[str]] = defaultdict(set)
+    cited_unit_ids = {row.unit_id for row in confirmed}
+    disputed_lots: set[str] = set()
+    for unit_id in sorted(memberships.keys() | cited_unit_ids):
+        lot_ids = memberships.get(unit_id, set())
+        if len(lot_ids) > 1:
+            recorded_lot_ids = tuple(sorted(lot for lot in lot_ids if lot is not None))
+            unresolved.append(ScopeFinding("UNIT", unit_id, "UNIT_LOT_CONFLICT", recorded_lot_ids))
+            if unit_id in cited_unit_ids:
+                disputed_lots.update(recorded_lot_ids)
+        elif not lot_ids or lot_ids == {None}:
+            unresolved.append(ScopeFinding("UNIT", unit_id, "UNIT_LOT_UNKNOWN"))
+        else:
+            lot_id = cast(str, next(iter(lot_ids)))
+            members[lot_id].append(unit_id)
+    unit_to_lot = {unit_id: lot_id for lot_id, unit_ids in members.items() for unit_id in unit_ids}
+    for row in confirmed:
+        if row.unit_id in unit_to_lot:
+            observed[unit_to_lot[row.unit_id]].add(row.inspection_id)
+
+    part_id, line_id = investigation.context.part_id, genealogy.line_id
+    for lot_id in sorted(lot_records.keys() | members.keys() | independent.keys() | disputed_lots):
+        rows = lot_records.get(lot_id, set())
+        if not rows:
+            unresolved.append(ScopeFinding("LOT", lot_id, "LOT_NOT_IN_ROSTER"))
+            continue
+        if len(rows) > 1:
+            unresolved.append(ScopeFinding("LOT", lot_id, "LOT_GENEALOGY_CONFLICT"))
+            continue
+        lot = next(iter(rows))
+        if line_id is None or lot.line_id is None or lot.part_id is None:
+            unresolved.append(ScopeFinding("LOT", lot_id, "LOT_CONTEXT_UNKNOWN"))
+        elif (lot.part_id, lot.line_id) != (part_id, line_id):
+            if lot_id in observed or lot_id in independent or lot_id in disputed_lots:
+                unresolved.append(ScopeFinding("LOT", lot_id, "LOT_EVIDENCE_CONTEXT_CONFLICT"))
+            else:
+                excluded.append(ScopeFinding("LOT", lot_id, "OUTSIDE_CHART_PART_OR_LINE"))
+        elif lot_id in observed or lot_id in independent:
+            basis: list[Literal["SIGNAL_CONTRIBUTOR", "INDEPENDENT_EXPOSURE_LINK"]] = []
+            if lot_id in observed:
+                basis.append("SIGNAL_CONTRIBUTOR")
+            if lot_id in independent:
+                basis.append("INDEPENDENT_EXPOSURE_LINK")
+            proposed.append(ProposedLotReview(
+                lot_id, tuple(members[lot_id]), tuple(basis), tuple(sorted(observed[lot_id])), _evidence_order(independent[lot_id]),
+            ))
+        else:
+            unresolved.append(ScopeFinding("LOT", lot_id, "LOT_EXPOSURE_UNCONFIRMED"))
+
+    changes = []
+    for event_id, rows in sorted(related.items()):
+        if not any(line_id == row.line_id for row in rows):
+            continue
+        if len(rows) > 1:
+            unresolved.append(ScopeFinding("FOUR_M", event_id, "FOUR_M_RECORD_CONFLICT"))
+        else:
+            changes.append(next(iter(rows)))
+    ongoing = _evidence_order({link.evidence for link in genealogy.ongoing_exposure
+                               if (link.part_id, link.line_id) == (part_id, line_id)})
+    limitations = result.limitations
+    if line_id is None:
+        limitations = (*limitations, "STATION_LINE_MAPPING_UNKNOWN")
+    actions: list[RecommendationAction] = ["RECONCILE_GENEALOGY"]
+    if proposed:
+        actions.append("REVIEW_HISTORICAL_CONTAINMENT")
+    if ongoing:
+        actions.append("INVESTIGATE_ONGOING_EXPOSURE")
+    return replace(
+        result, status="REVIEW_RECOMMENDED" if proposed else "SCOPE_UNRESOLVED", confirmed_observations=confirmed,
+        proposed_lots=tuple(proposed), unresolved=tuple(unresolved), excluded=tuple(excluded),
+        related_four_m=tuple(sorted(changes, key=attrgetter("effective_at", "event_id"))),
+        ongoing_evidence=ongoing, limitations=limitations, actions=tuple(actions),
+    )
