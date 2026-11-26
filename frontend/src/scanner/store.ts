@@ -1,5 +1,5 @@
 import { openDB, type IDBPDatabase } from 'idb'
-import { chainHash, GENESIS } from '../lib/chain'
+import { chainHash, GENESIS, SUPPORTED_CHAIN_VERSIONS } from '../lib/chain'
 import type { QueuedScan, StoredSnapshot } from './offline'
 
 let dbp: Promise<IDBPDatabase> | null = null
@@ -23,7 +23,11 @@ export async function appendScan(ev: Omit<QueuedScan, 'client_event_id' | 'seq' 
   const seq = ((await meta.get('seq')) ?? 0) + 1
   const prev = (await meta.get('head')) ?? GENESIS
   const client_event_id = `${device_id}:${String(seq).padStart(6, '0')}`
-  const full = { ...ev, client_event_id, seq, prev_hash: prev, hash: '' } as QueuedScan
+  // Writer version is read inside the same transaction as seq/head, so every tab appends under the device's current
+  // writer (never lower than one it has used). v2 hashes the capture snapshot: explicit null for ONLINE.
+  const version: number = (await meta.get('chain_writer')) ?? 1
+  const v2 = version === 2 ? { chain_version: 2, snapshot_id: ev.local_decision === 'ONLINE' ? null : (ev.snapshot_id ?? null) } : {}
+  const full = { ...ev, ...v2, client_event_id, seq, prev_hash: prev, hash: '' } as QueuedScan
   full.hash = chainHash(prev, full)
   await meta.put(seq, 'seq'); await meta.put(full.hash, 'head')
   await tx.objectStore('queue').put(full)
@@ -38,3 +42,20 @@ export const putSnapshot = async (s: StoredSnapshot) => { await (await db()).put
 export const deleteSnapshot = async (shipment: string) => { await (await db()).delete('meta', `snap:${shipment}`) }
 export const getPref = async <T,>(k: string): Promise<T | undefined> => (await db()).get('meta', `pref:${k}`)
 export const setPref = async (k: string, v: unknown) => { await (await db()).put('meta', v, `pref:${k}`) }
+
+export interface ChainPolicy { writer_version: number; min_version: number; supported?: number[] }
+/** Adopt the server's writer version (only upward, and only versions this build supports); report whether this build
+ *  is below the server's floor, in which case it must stop taking offline decisions until it is updated. */
+export async function applyChainPolicy(p: ChainPolicy): Promise<{ writer: number; outdated: boolean }> {
+  const d = await db()
+  const tx = d.transaction('meta', 'readwrite')
+  const current: number = (await tx.store.get('chain_writer')) ?? 1
+  const best = Math.max(...SUPPORTED_CHAIN_VERSIONS.filter(v => v <= p.writer_version), 1)
+  const writer = Math.max(current, best)
+  if (writer !== current) await tx.store.put(writer, 'chain_writer')
+  await tx.store.put(p, 'chain_policy')
+  await tx.done
+  return { writer, outdated: p.min_version > Math.max(...SUPPORTED_CHAIN_VERSIONS) || writer < p.min_version }
+}
+export const chainPolicy = async (): Promise<ChainPolicy | undefined> => (await db()).get('meta', 'chain_policy')
+export const chainWriter = async (): Promise<number> => ((await (await db()).get('meta', 'chain_writer')) ?? 1)

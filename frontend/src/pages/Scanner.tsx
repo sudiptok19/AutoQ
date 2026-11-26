@@ -9,7 +9,7 @@ import { Button, Honesty, Mono, Pill, Status, cx, ago, fmtTime } from '../compon
 import { GateChecklist, Reasons } from '../components/domain'
 import { QrCamera } from '../scanner/QrCamera'
 import { decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload, type StoredSnapshot, type SyncResult } from '../scanner/offline'
-import { appendScan, deleteSnapshot, deviceInfo, getPref, getSnapshot, listQueue, putSnapshot, setPref, updateScan } from '../scanner/store'
+import { appendScan, applyChainPolicy, chainPolicy, chainWriter, deleteSnapshot, deviceInfo, getPref, getSnapshot, listQueue, putSnapshot, setPref, updateScan, type ChainPolicy } from '../scanner/store'
 import { decodeTokenUnsafe, verifyToken } from '../lib/token'
 import { verifyChain } from '../lib/chain'
 
@@ -66,6 +66,13 @@ export default function Scanner() {
   const [shown, setShown] = useState<Shown | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+  const [chainV, setChainState] = useState<{ writer: number; outdated: boolean; policy?: ChainPolicy }>({ writer: 1, outdated: false })
+  const adoptChain = useCallback(async (p?: ChainPolicy) => {
+    if (!p) return
+    const r = await applyChainPolicy(p)
+    setChainState({ ...r, policy: p })
+  }, [])
+  useEffect(() => { Promise.all([chainPolicy(), chainWriter()]).then(([p, w]) => p ? adoptChain(p) : setChainState(c => ({ ...c, writer: w }))) }, [adoptChain])
   const lastText = useRef<{ t: string; at: number }>({ t: '', at: 0 })
   const [, tickNow] = useState(0)
   useEffect(() => { const i = setInterval(() => tickNow(n => n + 1), 15_000); return () => clearInterval(i) }, [])
@@ -95,8 +102,8 @@ export default function Scanner() {
       // Reporting the local queue lets the server count an empty-queue refresh as a check-in (manifest close waits for devices that haven't).
       const [info, q] = await Promise.all([deviceInfo(), listQueue()])
       const pendingNow = q.filter(x => !x.synced_at).length
-      const [{ token }, { keys }, pk] = await Promise.all([
-        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent(info.device_id)}&local_seq=${info.seq}&local_head=${info.head}&pending=${pendingNow}`),
+      const [{ token, chain: policy }, { keys }, pk] = await Promise.all([
+        api.get<{ token: string; chain?: ChainPolicy }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent(info.device_id)}&local_seq=${info.seq}&local_head=${info.head}&pending=${pendingNow}`),
         api.get<{ keys: { kid: string; public_key: string; status: string }[] }>('/keys'),
         api.get<{ items: Package[] }>('/packages'),
       ])
@@ -105,7 +112,7 @@ export default function Scanner() {
       const payload = v.payload as SnapPayload
       const demo_labels = pk.items.filter(p => p.token && ['SEALED', 'SEAL_REVIEW', 'LOADED'].includes(p.state)).map(p => ({ id: p.id, label: p.label, token: p.token! }))
       const s: StoredSnapshot = { token, payload, verified_at: new Date().toISOString(), shipment_code: ships?.find(x => x.id === shipId)?.code ?? shipId, demo_labels }
-      await putSnapshot(s); setSnap(s)
+      await putSnapshot(s); setSnap(s); await adoptChain(policy)
       if (!quiet) setMsg({ tone: 'ok', text: `Snapshot verified (kid ${v.kid}) · valid ${Math.round((payload.exp - payload.iat) / 60)} min` })
     } catch (e: any) { if (!quiet) setMsg({ tone: 'err', text: e?.message ?? 'Could not prepare offline mode' }) }
     finally { if (!quiet) setBusy(null) }
@@ -132,13 +139,14 @@ export default function Scanner() {
         }
       } else {
         if (!snap) { setMsg({ tone: 'err', text: 'No offline snapshot for this shipment. Reconnect and prepare offline mode first.' }); return }
+        if (chainV.outdated) { setMsg({ tone: 'err', text: 'This scanner build is older than the plant requires. Reload the app online before scanning offline.' }); return }
         const r = await decideLocally(token, snap.payload, await listQueue(), Date.now() / 1000, Date.parse(snap.verified_at))
         const ev = await appendScan({ token, shipment_id: shipId, scanned_at: now, local_decision: r.decision, local_reasons: r.reasons, local_checks: r.checks, package_id: r.package_id, package_label: r.package_label, units: r.units, status: 'PENDING', snapshot_id: snap.payload.id })
         setShown({ kind: 'OFFLINE', decision: r.decision, label: r.package_label, reasons: r.reasons, checks: r.checks, at: now, event: ev.client_event_id })
         buzz(r.decision === 'PROVISIONAL_ACCEPT')
       }
     } finally { await refreshLocal(); setBusy(null) }
-  }, [shipId, net.online, snap, dev, busy, refreshLocal, loadShips])
+  }, [shipId, net.online, snap, dev, busy, refreshLocal, loadShips, chainV.outdated])
 
   const onDecode = (text: string) => {
     if (shown || busy) return
@@ -162,11 +170,13 @@ export default function Scanner() {
       // batch stops the run, and whatever the server already committed comes back as DUPLICATE on the next sync.
       for (let i = 0; i < unsynced.length; i += SYNC_BATCH) {
         const batch = unsynced.slice(i, i + SYNC_BATCH)
-        const res = await api.post<{ results: (SyncResult & { scan?: ScanDecision })[]; chain: { ok: boolean; broken_at?: number } }>('/sync/scans', {
+        const res = await api.post<{ results: (SyncResult & { scan?: ScanDecision })[]; chain: { ok: boolean; broken_at?: number } & Partial<ChainPolicy> }>('/sync/scans', {
           device_id: dev?.device_id,
           events: batch.map(e => ({ client_event_id: e.client_event_id, seq: e.seq, prev_hash: e.prev_hash, hash: e.hash, token: e.token, shipment_id: e.shipment_id,
-            scanned_at: e.scanned_at, local_decision: e.local_decision, local_reasons: e.local_reasons, snapshot_id: snapshotFor(e, stored) })),
+            scanned_at: e.scanned_at, local_decision: e.local_decision, local_reasons: e.local_reasons, snapshot_id: snapshotFor(e, stored) ?? null,
+            chain_version: e.chain_version ?? 1 })),
         })
+        if (res.chain.writer_version) await adoptChain(res.chain as ChainPolicy)
         if (!res.chain.ok) { setMsg({ tone: 'err', text: `Server rejected the batch: device chain broken at seq ${res.chain.broken_at}. Escalate — events were altered after capture.` }); return }
         const at = new Date().toISOString()
         for (const r of res.results) {
@@ -320,6 +330,11 @@ export default function Scanner() {
               <Button className="w-full" disabled={!net.online || !shipId} loading={busy === 'snapshot'} onClick={() => prepareOffline()}><Download size={14} /> {snap ? 'Refresh' : 'Download'} signed snapshot</Button>
               {snap && <Button className="w-full" variant="ghost" disabled={!net.online || !!busy || pending.length > 0} loading={busy === 'settle'} onClick={endOffline}><CloudOff size={14} /> End offline session</Button>}
               {snap && <div className="text-[11px] leading-relaxed text-muted">The manifest cannot close while this phone holds an offline authorization. Sync, then end the session{pending.length > 0 ? ` (${pending.length} scan(s) still to sync)` : ''}.</div>}
+              <div className="flex items-center justify-between rounded-lg bg-surface-2 px-2.5 py-1.5 text-[11.5px]">
+                <span className="text-muted">Device chain</span>
+                <span><Mono>v{chainV.writer}</Mono>{chainV.policy && <span className="text-muted"> · plant floor v{chainV.policy.min_version}</span>}</span>
+              </div>
+              {chainV.outdated && <div className="rounded-lg bg-reject/10 px-2.5 py-2 text-[12px] text-reject"><b>Update required.</b> The plant no longer accepts offline decisions from this scanner version. Reload the app while online.</div>}
               <div className="text-[11px] leading-relaxed text-muted">Offline, the device checks signature, key, order, snapshot holds, local duplicates and quantity. It cannot know newer holds, other devices’ scans or seal state — so every offline decision is <b className="text-prov">provisional</b> and never counts as loaded until the server accepts it on sync.</div>
             </div>
           </section>

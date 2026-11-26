@@ -14,8 +14,11 @@ export interface QueuedScan {
   local_decision: LocalDecision; local_reasons: Reason[]; local_checks: GateCheck[]
   package_id: string | null; package_label: string | null; units: number
   status: QueueStatus; server_reasons?: Reason[]; server_checks?: GateCheck[]; note?: string; synced_at?: string
-  /** The signed snapshot this offline decision was made under. Sent per event: a batch can span shipments and refreshes. */
-  snapshot_id?: string
+  /** The signed snapshot this offline decision was made under. Sent per event: a batch can span shipments and refreshes.
+   *  Under chain v2 it is part of the hash (explicit null for ONLINE). */
+  snapshot_id?: string | null
+  /** Device-chain version this entry was hashed under (absent = 1). */
+  chain_version?: number
 }
 
 /** What the server said about one event on sync. A DUPLICATE carries the ORIGINAL outcome (e.g. after a lost response). */
@@ -23,8 +26,9 @@ export interface SyncResult { client_event_id: string; outcome: string; original
 
 /** The snapshot to cite for an event: the one recorded at capture, else (events queued before this field existed)
  *  the stored snapshot for its shipment whose validity window contains the capture time. */
-export function snapshotFor(ev: Pick<QueuedScan, 'snapshot_id' | 'shipment_id' | 'scanned_at' | 'local_decision'>,
+export function snapshotFor(ev: Pick<QueuedScan, 'snapshot_id' | 'shipment_id' | 'scanned_at' | 'local_decision' | 'chain_version'>,
                             stored: { payload: Pick<SnapPayload, 'id' | 'shipment' | 'iat' | 'exp'> }[]): string | undefined {
+  if (ev.chain_version === 2) return ev.snapshot_id ?? undefined   // hashed: exactly what was captured, never back-filled
   if (ev.snapshot_id) return ev.snapshot_id
   if (ev.local_decision === 'ONLINE') return undefined
   const t = Date.parse(ev.scanned_at) / 1000

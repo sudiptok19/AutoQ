@@ -9,6 +9,7 @@ from sqlalchemy import func, select, text, update
 from app.db import models as m
 from app.db.session import session_factory
 from app.features.dispatch import segregation
+from app.features.offline_scanner import service as offline_service
 from app.features.offline_scanner.service import _allowlist_reasons
 from tests.test_dispatch import scan, sealed, setup
 from tests.test_offline_scanner import GEN, events, snap, sync
@@ -73,10 +74,16 @@ def test_empty_queue_refresh_settles_older_authorizations_never_the_new_one(clie
     assert r3["superseded"] == [] and db.get(m.OfflineSnapshot, r2["snapshot_id"]).settled_at is None
 
 
-def test_expiry_does_not_settle(client, auth, db):
+def later(monkeypatch, **delta):
+    """Move the server's receipt clock forward; signed snapshot records themselves are immutable."""
+    t = datetime.now(UTC) + timedelta(**delta)
+    monkeypatch.setattr(offline_service, "_now", lambda: t)
+
+
+def test_expiry_does_not_settle(client, auth, db, monkeypatch):
     *_, shp = loaded_online(client, auth, db)
-    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
-    db.get(m.OfflineSnapshot, sid).expires_at = datetime.now(UTC) - timedelta(hours=1); db.commit()
+    snap(client, auth, shp["id"])
+    later(monkeypatch, hours=5)                                                        # past the 4 h signed expiry
     r = close(client, auth, shp["id"])
     assert blockers(r) == ["SNAPSHOT_UNSETTLED"] and "expired" in r.json()["error"]["details"]["blockers"][0]["message"]
 
@@ -150,7 +157,7 @@ def test_settlement_binds_sequence_and_hash(client, auth, db):
     assert ok["settled_seq"] == 1 and ok["settled_head"] == evs[0]["hash"]
 
 
-def test_authority_is_judged_at_receipt_not_by_claimed_capture_time(client, auth, db):
+def test_authority_is_judged_at_receipt_not_by_claimed_capture_time(client, auth, db, monkeypatch):
     _, _, _, a, b, shp = setup(client, auth, db)
     s1 = snap(client, auth, shp["id"]).json()["snapshot_id"]
     assert settle(client, auth, s1).status_code == 200
@@ -159,7 +166,10 @@ def test_authority_is_judged_at_receipt_not_by_claimed_capture_time(client, auth
     assert r["outcome"] == "CONFLICT" and "SNAPSHOT_SETTLED" in r["note"]
     s2 = snap(client, auth, shp["id"]).json()["snapshot_id"]
     late = events("dev-a1", [(b["token"], shp["id"], "PROVISIONAL_ACCEPT")], start_seq=2, head=backdated[0]["hash"])
-    db.get(m.OfflineSnapshot, s2).expires_at = datetime.now(UTC) - timedelta(seconds=1); db.commit()   # it expired before receipt
+    late[0]["scanned_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")     # captured in time …
+    from app.features.passport_crypto.service import chain_hash
+    late[0]["hash"] = chain_hash(backdated[0]["hash"], late[0])
+    later(monkeypatch, hours=5)                                                        # … received after the signed expiry
     r = sync(client, auth, "dev-a1", s2, late).json()["results"][0]
     assert r["outcome"] == "CONFLICT" and "SNAPSHOT_EXPIRED_AT_RECEIPT" in r["note"]
     assert _count(db, m.Load) == 0
@@ -342,7 +352,9 @@ def test_a_known_null_claim_is_not_mistaken_for_missing_legacy_metadata(client, 
     swapped = sync(client, auth, "dev-a1", sid, evs)                                   # now claims one
     assert swapped.status_code == 409 and swapped.json()["error"]["details"]["field"] == "snapshot_id"
     # A pre-0006 row: the claim was never recorded, so it cannot be compared (and is not invented).
-    db.execute(update(m.DeviceEvent).where(m.DeviceEvent.device_id == "dev-a1").values(claim_recorded=False)); db.commit()
+    db.execute(text("ALTER TABLE device_events DISABLE TRIGGER device_events_immutable"))     # simulate a pre-0006 row
+    db.execute(update(m.DeviceEvent).where(m.DeviceEvent.device_id == "dev-a1").values(claim_recorded=False))
+    db.execute(text("ALTER TABLE device_events ENABLE TRIGGER device_events_immutable")); db.commit()
     assert sync(client, auth, "dev-a1", sid, evs).json()["results"][0]["outcome"] == "DUPLICATE"
 
 
