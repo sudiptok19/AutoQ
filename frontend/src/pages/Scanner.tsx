@@ -96,7 +96,7 @@ export default function Scanner() {
       const [info, q] = await Promise.all([deviceInfo(), listQueue()])
       const pendingNow = q.filter(x => !x.synced_at).length
       const [{ token }, { keys }, pk] = await Promise.all([
-        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent(info.device_id)}&local_seq=${info.seq}&pending=${pendingNow}`),
+        api.get<{ token: string }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent(info.device_id)}&local_seq=${info.seq}&local_head=${info.head}&pending=${pendingNow}`),
         api.get<{ keys: { kid: string; public_key: string; status: string }[] }>('/keys'),
         api.get<{ items: Package[] }>('/packages'),
       ])
@@ -197,7 +197,8 @@ export default function Scanner() {
     setBusy('settle'); setMsg(null)
     try {
       const [info, q] = await Promise.all([deviceInfo(), listQueue()])
-      await api.post(`/offline/snapshots/${snap.payload.id}/settle`, { device_id: info.device_id, local_seq: info.seq, pending: q.filter(x => !x.synced_at).length })
+      // Settlement binds where this phone's chain ends (sequence AND hash) to "nothing left to sync".
+      await api.post(`/offline/snapshots/${snap.payload.id}/settle`, { device_id: info.device_id, local_seq: info.seq, local_head: info.head, pending: q.filter(x => !x.synced_at).length })
       await deleteSnapshot(shipId); setSnap(undefined)
       setMsg({ tone: 'ok', text: 'Offline session ended. This phone can no longer load offline for this shipment.' })
     } catch (e: any) {

@@ -42,4 +42,12 @@ Short entries. Newest at the bottom. Format: decision — why — tradeoff.
     - **Catch-up:** `GET /events?since=` serves committed HIGH/CRITICAL or siren events from the outbox itself, in the socket's envelope, for up to 24 h. The browser keeps a per-user cursor and the ids it has shown, asks from 2 minutes before the cursor to catch late commits, and marks those pop-ups "while disconnected", with one siren for a whole backlog.
 
     The WebSocket event contract is unchanged. — Tradeoff: re-checking is polling (a revoked user can receive up to 15 s more events), and the catch-up cursor lives in the browser, so a new device starts from "now".
+31. **Offline load authority is judged at receipt; lost devices clear only through physical reconciliation.** *(Review of #33/#34.)*
+    - **Settlement:** binds the device's terminal sequence **and** hash.
+    - **Receipt:** a provisional event gains load authority only if the server *receives* it while its snapshot is unsettled, not under recovery, and unexpired. A claimed capture time can narrow authority, never extend it.
+    - **Recovery:** first *requests* recovery, which ends offline authority and raises a `DEVICE_RECONCILIATION` task. The snapshot settles only with linked uploaded evidence or when a QE/QM completes that task.
+    - **Locks:** every locked read refreshes the row (`populate_existing`), so checks made "under the lock" never judge a pre-lock copy. Every creator of a shipment-blocking task holds the shipment lock, which serializes it with departure (tested in both commit orders).
+    - **Replay:** distinguishes a recorded null snapshot claim from pre-0006 rows whose claim is unknown, and compares the submitted `prev_hash`.
+
+    — Tradeoff: honest phones that sync after expiry or settlement now need a physical check instead of loading automatically.
 

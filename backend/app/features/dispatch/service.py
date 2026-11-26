@@ -95,7 +95,7 @@ def open_physical_tasks(db: Session, shipment_id: str) -> list[m.SegregationTask
     """Unload/segregate orders still open against this shipment, including crates that never made it onto the manifest
     (an offline-staged load the server refused). The truck may not leave until each has a recorded disposition."""
     return list(db.scalars(select(m.SegregationTask).where(m.SegregationTask.shipment_id == shipment_id, m.SegregationTask.status == "OPEN",
-                                                           m.SegregationTask.type.in_(("REMOVAL_REQUIRED", "SEGREGATION_REQUIRED")))
+                                                           m.SegregationTask.type.in_(("REMOVAL_REQUIRED", "SEGREGATION_REQUIRED", "DEVICE_RECONCILIATION")))
                            .order_by(m.SegregationTask.created_at)))
 
 
@@ -107,8 +107,10 @@ def _reconciliation_blockers(db: Session, s: m.Shipment) -> list[dict]:
     for o in outstanding_for_shipment(db, s.id):
         out.append({"code": "SNAPSHOT_UNSETTLED", "device_id": o["device_id"], "snapshot_id": o["snapshot_id"],
                     "message": f"Device {o['device_id']} ({o['operator']}) holds an offline authorization issued {o['issued_at']}"
-                               f"{' (expired, but its captures may still be on the phone)' if o['expired'] else ''} — end the offline session "
-                               "on the device, or a Quality Manager must recover it"})
+                               + (" — recovery requested: complete its physical reconciliation task or attach reconciliation evidence"
+                                  if o["recovery_requested_at"] else
+                                  f"{' (expired, but its captures may still be on the phone)' if o['expired'] else ''} — end the offline session "
+                                  "on the device, or a Quality Manager must recover it")})
     for t in open_physical_tasks(db, s.id):
         pkg = db.get(m.Package, t.package_id) if t.package_id else None
         out.append({"code": "PHYSICAL_TASK_OPEN", "task_id": t.id, "package_id": t.package_id,

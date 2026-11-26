@@ -255,7 +255,7 @@ def release(db: Session, p: Principal, recall_id: str, reason: str) -> dict:
         locks.lock(m.Heat, [r0.scope_id])
     units = locks.lock(m.Unit, unit_ids)
     locks.lock(m.Package, pkg_ids)
-    r = db.scalars(select(m.Recall).where(m.Recall.id == recall_id).with_for_update()).one()
+    r = db.scalars(select(m.Recall).where(m.Recall.id == recall_id).with_for_update().execution_options(populate_existing=True)).one()
     if r.released_at:
         raise ApiError(409, "RECALL_RELEASED", "Recall already released")
     now = datetime.now(UTC)

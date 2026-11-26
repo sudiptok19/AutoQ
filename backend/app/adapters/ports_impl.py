@@ -44,7 +44,7 @@ class PgPorts:
 
     def save_reference(self, db: Session, profile_id: str, image: bytes, media_type: str, principal: Principal) -> VisionProfile:
         """A new reference creates a new, UNCALIBRATED revision; calibration needs an accepted held-out evaluation."""
-        old = db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.id == profile_id).with_for_update()).first()
+        old = db.scalars(select(m.InspectionProfile).where(m.InspectionProfile.id == profile_id).with_for_update().execution_options(populate_existing=True)).first()
         if not old:
             raise ApiError(404, "PROFILE_NOT_FOUND", "Inspection profile not found")
         sha = put_evidence(db, image, sniff(image) or media_type, "LIVE_CAPTURE", principal.id)

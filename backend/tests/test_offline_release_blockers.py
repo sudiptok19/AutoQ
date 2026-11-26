@@ -1,11 +1,13 @@
 """Offline dispatch release blockers (review of 45a6d3f): settlement per snapshot, replay authorization and provenance,
 shipment-safe segregation. Real PostgreSQL, separate connections for the races."""
 import concurrent.futures as cf
+import time
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 
 from app.db import models as m
+from app.db.session import session_factory
 from app.features.dispatch import segregation
 from app.features.offline_scanner.service import _allowlist_reasons
 from tests.test_dispatch import scan, sealed, setup
@@ -26,12 +28,13 @@ def blockers(r):
     return [b["code"] for b in r.json()["error"]["details"]["blockers"]]
 
 
-def settle(client, auth, sid, device="dev-a1", seq=0, pending=0, who="disp.kiran"):
-    return client.post(f"{API}/offline/snapshots/{sid}/settle", json={"device_id": device, "local_seq": seq, "pending": pending}, headers=auth(who))
+def settle(client, auth, sid, device="dev-a1", seq=0, pending=0, head=GEN, who="disp.kiran"):
+    return client.post(f"{API}/offline/snapshots/{sid}/settle", json={"device_id": device, "local_seq": seq, "local_head": head, "pending": pending},
+                       headers=auth(who))
 
 
-def recover(client, auth, sid, who="qm.farhan", reason="Phone dropped in the yard; not recoverable today"):
-    return client.post(f"{API}/offline/snapshots/{sid}/recover", json={"reason": reason}, headers=auth(who))
+def recover(client, auth, sid, who="qm.farhan", reason="Phone dropped in the yard; not recoverable today", evidence=None):
+    return client.post(f"{API}/offline/snapshots/{sid}/recover", json={"reason": reason, "evidence_ids": evidence or []}, headers=auth(who))
 
 
 def loaded_online(client, auth, db):
@@ -58,14 +61,14 @@ def test_close_waits_for_an_explicit_settlement_with_an_empty_queue(client, auth
 def test_empty_queue_refresh_settles_older_authorizations_never_the_new_one(client, auth, db):
     *_, shp = loaded_online(client, auth, db)
     s1 = snap(client, auth, shp["id"]).json()["snapshot_id"]
-    r2 = client.get(f"{API}/offline/snapshot", params={"shipment_id": shp["id"], "device_id": "dev-a1", "local_seq": 0, "pending": 0},
+    r2 = client.get(f"{API}/offline/snapshot", params={"shipment_id": shp["id"], "device_id": "dev-a1", "local_seq": 0, "local_head": GEN, "pending": 0},
                     headers=auth("disp.kiran")).json()
     assert r2["superseded"] == [s1]
     assert db.get(m.OfflineSnapshot, s1).settlement == "SUPERSEDED"
     r = close(client, auth, shp["id"])
     assert blockers(r) == ["SNAPSHOT_UNSETTLED"] and r.json()["error"]["details"]["blockers"][0]["snapshot_id"] == r2["snapshot_id"]
     # A refresh that admits unsynced events settles nothing.
-    r3 = client.get(f"{API}/offline/snapshot", params={"shipment_id": shp["id"], "device_id": "dev-a1", "local_seq": 0, "pending": 2},
+    r3 = client.get(f"{API}/offline/snapshot", params={"shipment_id": shp["id"], "device_id": "dev-a1", "local_seq": 0, "local_head": GEN, "pending": 2},
                     headers=auth("disp.kiran")).json()
     assert r3["superseded"] == [] and db.get(m.OfflineSnapshot, r2["snapshot_id"]).settled_at is None
 
@@ -89,28 +92,77 @@ def test_capture_after_settlement_is_a_conflict_and_blocks_departure(client, aut
     assert "PHYSICAL_TASK_OPEN" in blockers(close(client, auth, shp["id"]))
 
 
-def test_lost_device_is_recovered_only_by_a_manager_with_a_reason_then_late_captures_conflict(client, auth, db):
+def test_lost_device_recovery_needs_physical_reconciliation_before_release(client, auth, db):
     *_, a, b, shp = loaded_online(client, auth, db)
     sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
     assert recover(client, auth, sid, who="disp.kiran").status_code == 403
     assert recover(client, auth, sid, reason="lost").status_code == 422             # a real reason is required
-    rec = recover(client, auth, sid).json()
-    assert rec["settlement"] == "RECOVERED" and rec["settled_by"] == "qm.farhan"
-    assert db.scalars(select(m.AuditEvent).where(m.AuditEvent.action == "OFFLINE_DEVICE_RECOVERED")).first().reason.startswith("Phone dropped")
+    req = recover(client, auth, sid).json()
+    assert req["recovery_requested_at"] and req["settlement"] is None and req["recovery_task_id"]
+    assert db.scalars(select(m.AuditEvent).where(m.AuditEvent.action == "OFFLINE_DEVICE_RECOVERY_REQUESTED")).first().reason.startswith("Phone dropped")
     assert db.scalars(select(m.Alert).where(m.Alert.type == "OFFLINE_DEVICE_RECOVERED")).first() is not None
-    assert recover(client, auth, sid).status_code == 409                            # never twice
+    assert recover(client, auth, sid).json()["error"]["code"] == "RECOVERY_IN_PROGRESS"
     assert settle(client, auth, sid).json()["error"]["code"] == "SNAPSHOT_RECOVERED"  # the phone cannot quietly undo it
-    assert close(client, auth, shp["id"]).json()["status"] == "CLOSED"
-    # The phone turns up after close and syncs what it captured: every provisional load needs physical verification.
+    # Requesting recovery does not release the truck: the reconciliation is still owed.
+    assert set(blockers(close(client, auth, shp["id"]))) == {"SNAPSHOT_UNSETTLED", "PHYSICAL_TASK_OPEN"}
+    # The phone turns up and syncs what it captured: authority ended at the recovery request.
     r = sync(client, auth, "dev-a1", sid, events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])).json()["results"][0]
     assert r["outcome"] == "CONFLICT" and "SNAPSHOT_RECOVERED" in r["note"]
-    dep = client.post(f"{API}/shipments/{shp['id']}/events", json={"type": "DEPARTED", "location": "Gate"}, headers=auth("disp.kiran"))
-    assert dep.status_code == 409 and dep.json()["error"]["code"] == "DEPARTURE_NOT_RECONCILED"
-    # The crate is also legitimately loaded on this truck (online scan), so a QE verifies rather than anyone unloading.
-    assert client.post(f"{API}/segregation-tasks/{r['segregation_task_id']}/complete", json={"reason": "Verified: one crate, loaded by the online scan"},
+    tid = req["recovery_task_id"]
+    assert client.post(f"{API}/segregation-tasks/{tid}/complete", json={"reason": "counted"}, headers=auth("disp.kiran")).status_code == 403
+    done = client.post(f"{API}/segregation-tasks/{tid}/complete", json={"reason": "Counted Dock 3 truck and lane: 2 crates, both on the manifest"},
+                       headers=auth("qe.ananya")).json()
+    assert done["status"] == "COMPLETED"
+    sn = db.get(m.OfflineSnapshot, sid); db.refresh(sn)
+    assert sn.settlement == "RECOVERED" and sn.recovery_evidence == [{"task_id": tid}] and "Counted Dock 3" in sn.settlement_reason
+    # The late capture's own task (crate is also legitimately loaded) is verified by a QE; then the truck may go.
+    assert client.post(f"{API}/segregation-tasks/{r['segregation_task_id']}/complete", json={"reason": "Verified: one crate, loaded online"},
                        headers=auth("qe.ananya")).status_code == 200
-    dep = client.post(f"{API}/shipments/{shp['id']}/events", json={"type": "DEPARTED", "location": "Gate"}, headers=auth("disp.kiran"))
-    assert dep.status_code == 200 and dep.json()["status"] == "IN_TRANSIT"
+    assert close(client, auth, shp["id"]).json()["status"] == "CLOSED"
+
+
+def upload(client, auth, who="qe.ananya"):
+    r = client.post(f"{API}/evidence", files={"file": ("recount.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")}, data={"purpose": "REVIEW_RECORD"},
+                    headers=auth(who))
+    assert r.status_code in (200, 201), r.text
+    return r.json()["sha256"]
+
+
+def test_recovery_with_linked_reconciliation_evidence_settles_at_once(client, auth, db):
+    *_, shp = loaded_online(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    assert recover(client, auth, sid, evidence=["0" * 64]).status_code == 422          # evidence must exist
+    sha = upload(client, auth)
+    rec = recover(client, auth, sid, evidence=[sha]).json()
+    assert rec["settlement"] == "RECOVERED" and rec["recovery_evidence"][0]["sha256"] == sha
+    assert db.get(m.SegregationTask, rec["recovery_task_id"]).status == "COMPLETED"
+    assert close(client, auth, shp["id"]).json()["status"] == "CLOSED"
+
+
+def test_settlement_binds_sequence_and_hash(client, auth, db):
+    _, _, _, a, _, shp = setup(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    evs = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])
+    sync(client, auth, "dev-a1", sid, evs)
+    wrong = settle(client, auth, sid, seq=1, head="f" * 64)                            # same length, different history
+    assert wrong.status_code == 409 and wrong.json()["error"]["details"]["server_head"] == evs[0]["hash"]
+    ok = settle(client, auth, sid, seq=1, head=evs[0]["hash"]).json()
+    assert ok["settled_seq"] == 1 and ok["settled_head"] == evs[0]["hash"]
+
+
+def test_authority_is_judged_at_receipt_not_by_claimed_capture_time(client, auth, db):
+    _, _, _, a, b, shp = setup(client, auth, db)
+    s1 = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    assert settle(client, auth, s1).status_code == 200
+    backdated = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])     # "captured" before settlement, received after
+    r = sync(client, auth, "dev-a1", s1, backdated).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and "SNAPSHOT_SETTLED" in r["note"]
+    s2 = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    late = events("dev-a1", [(b["token"], shp["id"], "PROVISIONAL_ACCEPT")], start_seq=2, head=backdated[0]["hash"])
+    db.get(m.OfflineSnapshot, s2).expires_at = datetime.now(UTC) - timedelta(seconds=1); db.commit()   # it expired before receipt
+    r = sync(client, auth, "dev-a1", s2, late).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and "SNAPSHOT_EXPIRED_AT_RECEIPT" in r["note"]
+    assert _count(db, m.Load) == 0
 
 
 def test_snapshot_issuance_and_close_are_serialized(client, auth, db):
@@ -278,3 +330,83 @@ def test_offline_duplicate_on_the_same_truck_never_unloads_the_legitimate_load(c
     ok = client.post(f"{API}/segregation-tasks/{tid}/complete", json={"reason": "One crate, already on this truck from the control-room scan"},
                      headers=auth("qe.ananya")).json()
     assert ok["location_conflict"]["recorded_on"] == shp["code"] and _active_load(db, a["id"]).shipment_id == shp["id"]
+
+
+# ── replay details (review of #33/#34) ─────────────────────────────────────────────────────────────────────────
+def test_a_known_null_claim_is_not_mistaken_for_missing_legacy_metadata(client, auth, db):
+    _, _, _, a, _, shp = setup(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    evs = events("dev-a1", [(a["token"], shp["id"], "ONLINE")])
+    assert sync(client, auth, "dev-a1", None, evs).json()["results"][0]["outcome"] == "BLOCKED"   # synced with NO snapshot
+    assert db.get(m.DeviceEvent, ("dev-a1", 1)).claim_recorded is True
+    swapped = sync(client, auth, "dev-a1", sid, evs)                                   # now claims one
+    assert swapped.status_code == 409 and swapped.json()["error"]["details"]["field"] == "snapshot_id"
+    # A pre-0006 row: the claim was never recorded, so it cannot be compared (and is not invented).
+    db.execute(update(m.DeviceEvent).where(m.DeviceEvent.device_id == "dev-a1").values(claim_recorded=False)); db.commit()
+    assert sync(client, auth, "dev-a1", sid, evs).json()["results"][0]["outcome"] == "DUPLICATE"
+
+
+def test_replay_compares_the_submitted_previous_hash(client, auth, db):
+    _, _, _, a, _, shp = setup(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    evs = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])
+    sync(client, auth, "dev-a1", sid, evs)
+    forged = [dict(evs[0], prev_hash="a" * 64)]                                        # hash field kept, link changed
+    r = sync(client, auth, "dev-a1", sid, forged)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "EVENT_CONTENT_CHANGED"
+
+
+# ── commit order: a shipment-blocking task vs departure ────────────────────────────────────────────────────────
+def _waiting_on_locks(n, timeout=10.0):
+    """pg_stat_activity is frozen for the length of a transaction, so poll on a fresh session each time."""
+    end = time.time() + timeout
+    while time.time() < end:
+        with session_factory()() as s:
+            got = s.execute(text("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()")).scalar()
+        if got >= n:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"expected {n} transactions waiting on row locks")
+
+
+def _closed_with_a_settled_phone(client, auth, db):
+    *_, a, b, shp = loaded_online(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    assert settle(client, auth, sid).status_code == 200
+    assert close(client, auth, shp["id"]).json()["status"] == "CLOSED"
+    return a, shp, sid
+
+
+def _race(client, auth, db, first: str):
+    """Hold the shipment row, queue the two transactions in a chosen order behind it, release, and let them commit."""
+    a, shp, sid = _closed_with_a_settled_phone(client, auth, db)
+    late = events("dev-a1", [(a["token"], shp["id"], "PROVISIONAL_ACCEPT")])           # a phone event that arrives late
+    jobs = {"sync": lambda: sync(client, auth, "dev-a1", sid, late),
+            "depart": lambda: client.post(f"{API}/shipments/{shp['id']}/events", json={"type": "DEPARTED", "location": "Gate"}, headers=auth("disp.kiran"))}
+    second = "depart" if first == "sync" else "sync"
+    holder = session_factory()()
+    holder.execute(text("SELECT id FROM shipments WHERE id = :i FOR UPDATE"), {"i": shp["id"]})
+    with cf.ThreadPoolExecutor(2) as ex:
+        try:
+            f1 = ex.submit(jobs[first]); _waiting_on_locks(1)
+            f2 = ex.submit(jobs[second]); _waiting_on_locks(2)
+        finally:
+            holder.commit(); holder.close()                                          # always release, or the threads never finish
+        out = {first: f1.result(timeout=60), second: f2.result(timeout=60)}
+    db.expire_all()
+    return out, db.get(m.Shipment, shp["id"])
+
+
+def test_commit_order_task_first_blocks_departure(client, auth, db):
+    out, ship = _race(client, auth, db, first="sync")
+    assert out["sync"].json()["results"][0]["outcome"] == "CONFLICT"
+    assert out["depart"].status_code == 409 and out["depart"].json()["error"]["code"] == "DEPARTURE_NOT_RECONCILED"
+    assert ship.status == "CLOSED"
+
+
+def test_commit_order_departure_first_then_the_late_event_is_recorded_against_the_departed_truck(client, auth, db):
+    out, ship = _race(client, auth, db, first="depart")
+    assert out["depart"].status_code == 200 and ship.status == "IN_TRANSIT"
+    r = out["sync"].json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and r["segregation_task_id"]                    # nothing lost: a task and an alert, no load
+    assert db.get(m.SegregationTask, r["segregation_task_id"]).shipment_id == ship.id

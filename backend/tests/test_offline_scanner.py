@@ -190,9 +190,10 @@ def test_lost_sync_response_still_returns_the_unload_instruction(client, auth, d
     assert again["segregation_task_id"] == first["segregation_task_id"] and again["segregation_task_status"] == "OPEN"
 
 
-def settle_all(client, auth, shp_id, device, who="disp.kiran", seq=0):
+def settle_all(client, auth, shp_id, device, who="disp.kiran", seq=0, head=GEN):
     view = client.get(f"{API}/shipments/{shp_id}", headers=auth(who)).json()
     for o in view["offline_authorizations_open"]:
         if o["device_id"] == device:
-            r = client.post(f"{API}/offline/snapshots/{o['snapshot_id']}/settle", json={"device_id": device, "local_seq": seq, "pending": 0}, headers=auth(who))
+            r = client.post(f"{API}/offline/snapshots/{o['snapshot_id']}/settle", json={"device_id": device, "local_seq": seq, "local_head": head, "pending": 0},
+                            headers=auth(who))
             assert r.status_code == 200, r.text
