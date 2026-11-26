@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from nacl.signing import SigningKey
 
 from app.core import errors
+from app.core.canonical import canonicalize
 from app.core.signing import b64url
 from app.db.session import get_db
 from app.features.passport_crypto.router import router
@@ -34,6 +36,8 @@ VALID_BY_NAME = {case["name"]: case for case in VECTORS["valid"]}
 PP = VALID_BY_NAME["python_pp_unicode_text"]["payload"]
 PKG = VALID_BY_NAME["python_pkg"]["payload"]
 SNAP = VALID_BY_NAME["python_snap"]["payload"]
+CHAIN_V2 = VECTORS["chain_v2"]
+CHAIN_BY_NAME = {case["name"]: case for case in CHAIN_V2["valid"]}
 
 
 @pytest.mark.parametrize("vector", VECTORS["valid"], ids=lambda vector: vector["name"])
@@ -191,6 +195,84 @@ def test_chain_hash_matches_browser_projection():
     assert chain_hash(GENESIS, {**event, "local_reasons": [], "hash": "excluded"}) == vector["hash"]
     assert chain_hash(GENESIS, {**event, "seq": 2}) != vector["hash"]
     assert chain_hash(vector["hash"], event) != vector["hash"]
+
+
+def test_legacy_chain_keeps_original_projection_and_previous_hash_spelling():
+    vector = VECTORS["chain"]
+    event = vector["event"]
+    assert chain_hash(GENESIS, {**event, "chain_version": 1, "snapshot_id": "snap-ignored"}) == vector["hash"]
+    prev = "AB" * 32
+    projection = {field: value for field, value in event.items() if field != "local_reasons"}
+    expected = sha256((prev + "|" + canonicalize(projection)).encode("utf-8")).hexdigest()
+    assert chain_hash(prev, event) == expected
+    assert chain_hash(prev.lower(), event) != expected
+
+
+@pytest.mark.parametrize("case", CHAIN_V2["valid"], ids=lambda case: case["name"])
+def test_chain_v2_interoperability(case):
+    event = case["event"]
+    assert canonicalize(event) == case["canonical"]
+    assert chain_hash(case["prev_hash"], event) == case["hash"]
+    reversed_event = dict(reversed(list(event.items())))
+    assert chain_hash(case["prev_hash"], {**reversed_event, "local_reasons": [], "hash": None}) == case["hash"]
+
+
+def test_chain_v2_extends_the_original_checkpoint():
+    legacy = VECTORS["chain"]
+    head = chain_hash(legacy["prev_hash"], legacy["event"])
+    seq = legacy["event"]["seq"]
+    for case in CHAIN_V2["valid"]:
+        event = case["event"]
+        assert case["prev_hash"] == head and event["seq"] == seq + 1
+        head = chain_hash(head, event)
+        assert head == case["hash"]
+        seq = event["seq"]
+
+
+@pytest.mark.parametrize("case", CHAIN_V2["invalid"], ids=lambda case: case["name"])
+def test_chain_v2_rejects_invalid_interoperability_vectors(case):
+    base = CHAIN_BY_NAME[case["base"]]
+    event = {**base["event"], **case.get("changes", {})}
+    for field in case.get("omit", ()):
+        del event[field]
+    with pytest.raises(CryptoError) as caught:
+        chain_hash(case.get("prev_hash", base["prev_hash"]), event)
+    assert caught.value.code == case["code"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"seq": 0}, {"seq": -1}, {"seq": True}, {"seq": "2"}, {"seq": 2.0},
+    {"chain_version": 2.0}, {"snapshot_id": 123}, {"client_event_id": ""},
+    {"shipment_id": "shipment/path"}, {"local_decision": "ACCEPTED"},
+    {"token": None}, {"scanned_at": 1795300000},
+])
+def test_chain_v2_rejects_invalid_fields_without_coercion(changes):
+    case = CHAIN_V2["valid"][0]
+    with pytest.raises(CryptoError) as caught:
+        chain_hash(case["prev_hash"], {**case["event"], **changes})
+    assert caught.value.code == "SCHEMA_INVALID"
+
+
+def test_chain_v2_snapshot_and_predecessor_mutations_change_the_digest():
+    case = CHAIN_V2["valid"][0]
+    prev, event = case["prev_hash"], case["event"]
+    assert chain_hash(prev, {**event, "snapshot_id": "snap-vector-002"}) != case["hash"]
+    assert chain_hash(GENESIS, event) != case["hash"]
+    assert chain_hash(
+        prev, {**event, "scanned_at": "2026-11-22T03:57:40.000+05:30"},
+    ) != case["hash"]  # The same instant with different captured text is a different event.
+    with pytest.raises(CryptoError) as caught:
+        chain_hash(prev[:-1], event)
+    assert caught.value.code == "SCHEMA_INVALID"
+
+
+def test_chain_v2_digest_cannot_be_reused_as_a_legacy_digest():
+    case = CHAIN_V2["valid"][0]
+    event = dict(case["event"])
+    del event["chain_version"]
+    legacy_digest = chain_hash(case["prev_hash"], event)
+    assert legacy_digest == chain_hash(case["prev_hash"], {**event, "chain_version": 1})
+    assert legacy_digest != case["hash"]  # Opus must also disallow freshly recomputed v1 events after cutover.
 
 
 def _client(port, session):
