@@ -50,6 +50,7 @@ The suite never touches your dev, demo or verification databases:
 - It creates, migrates and seeds its own `autoq_e2e` database from scratch on every run.
 - It starts its own API on a dedicated port and never attaches to a server that is already running.
 - With `AUTOQ_E2E=1`, the API refuses to boot, and the demo reset refuses to run, unless the database is local and named `*_e2e`.
+- It signs with its own throwaway key (`aq-e2e-1`, created under `e2e/.tmp`), never the dev key, and runs Python in UTF-8 mode, so Windows consoles work too.
 
 Use `AUTOQ_E2E_DB=<name>_e2e` to choose another disposable database and `AUTOQ_E2E_API_PORT` to change the API port.
 
@@ -60,6 +61,7 @@ The `live` project plays the demo in order:
 - recall, tasks and release;
 - 8D approval and PDF;
 - live alerts across two browsers;
+- a mounted phone scanner reconciling offline loads (acceptance, a conflict, QE verification, ending the offline session, close) on a second shipment staged only in the e2e database;
 - audit verification.
 
 The `mock` project is a backend-free smoke test (`make e2e-mock`). `npm run report` opens the last HTML report.

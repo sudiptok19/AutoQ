@@ -108,7 +108,7 @@ class Demo:
         return s
 
     # ── the story ──
-    def run(self) -> dict:
+    def run(self, scanner_dock: bool = False) -> dict:
         log = self.log
         sup1 = self.post("/suppliers", "admin", json={"code": "SUP-014", "name": "Shree Forgings", "synthetic": True})
         sup2 = self.post("/suppliers", "admin", json={"code": "SUP-022", "name": "Vardhman Castings", "synthetic": True})
@@ -167,7 +167,16 @@ class Demo:
         fm = self.post("/four-m-events", "qe.ananya", json={"category": "MACHINE", "planned": False, "line_id": l3["id"],
                                                             "description": "Boring insert replaced on OP-20", "reason": "Insert chipped mid-shift"})
         log(f"4M {fm.get('event', fm).get('code', '')} on Line 3 → containment ACTIVE")
-        return {"dock_shipment": dock["code"], "ready_package": ready["label"], "recall_heat": "H-7781"}
+        out = {"dock_shipment": dock["code"], "ready_package": ready["label"], "recall_heat": "H-7781"}
+        if scanner_dock:   # e2e only: a second open shipment the phone-scanner spec owns, so it never disturbs the dock story
+            so5 = self.post("/orders", "disp.kiran", json={"order_no": "SO-1005", "customer_id": cus["Gurugram"]["id"], "part_id": part["id"],
+                                                           "qty_units": 4, "destination": "Gurugram – Gate 4"})
+            s1 = self.package(so5["id"], pb[6:8], seed=90)
+            s2 = self.package(so5["id"], pb[8:10], seed=95)
+            sd = self.post("/shipments", "disp.kiran", json={"order_id": so5["id"], "vehicle_no": "HR-26-SC-0505", "dock": "Dock 5"})
+            log(f"SO-1005 scanner dock: shipment {sd['code']} OPEN · {s1['label']} + {s2['label']} ready")
+            out |= {"scanner_shipment": sd["code"], "scanner_packages": [s1["label"], s2["label"]]}
+        return out
 
 
 def _guard_local() -> None:
@@ -195,6 +204,7 @@ def reset_database() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--reset", action="store_true", help="TRUNCATE every table first (local databases only)")
+    ap.add_argument("--scanner-dock", action="store_true", help="also stage SO-1005 / a second open shipment for the e2e phone-scanner spec")
     a = ap.parse_args()
     from fastapi.testclient import TestClient
 
@@ -203,7 +213,7 @@ def main() -> None:
         reset_database()
         print("database reset; dev users + demo-1 policy seeded")
     with TestClient(create_app()) as client:
-        out = Demo(client, lambda s: print(" ·", s)).run()
+        out = Demo(client, lambda s: print(" ·", s)).run(scanner_dock=a.scanner_dock)
     print(f"demo ready — dock shipment {out['dock_shipment']}, scan {out['ready_package']} first; recall heat {out['recall_heat']} from Trace")
 
 
