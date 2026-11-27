@@ -53,10 +53,17 @@ function Reconciliation({ ship }: { ship: ShipView }) {
   const [reason, setReason] = useState('')
   const [record, setRecord] = useState<File | null>(null)
   const recover = useAct(async () => {
-    // Optional uploaded recount/inspection record: with it the authorization settles now; without it a reconciliation task is raised.
-    const evidence_ids: string[] = []
-    if (record) { const f = new FormData(); f.set('file', record, record.name); f.set('purpose', 'REVIEW_RECORD'); evidence_ids.push((await api.post<{ sha256: string }>('/evidence', f)).sha256) }
-    return api.post(`/offline/snapshots/${recovering!.snapshot_id}/recover`, { reason, evidence_ids })
+    // The recovery is requested first (ends the phone's authority, raises a reconciliation task). A recount record only
+    // settles it if it was uploaded for this recovery, after the request — so the upload always follows the request.
+    const url = `/offline/snapshots/${recovering!.snapshot_id}/recover`
+    let out: unknown = null
+    if (!recovering!.recovery_requested_at) out = await api.post(url, { reason, evidence_ids: [] })
+    if (record) {
+      const f = new FormData(); f.set('file', record, record.name); f.set('purpose', 'REVIEW_RECORD')
+      const { sha256 } = await api.post<{ sha256: string }>('/evidence', f)
+      out = await api.post(url, { reason, evidence_ids: [sha256] })
+    }
+    return out
   })
   const done = useAct(() => api.post(`/segregation-tasks/${doing!.id}/complete`, { reason }))
   if (!auths.length && !tasks.length) return null
@@ -70,7 +77,8 @@ function Reconciliation({ ship }: { ship: ShipView }) {
             <Pill tone="prov">OFFLINE</Pill><Mono>{a.device_id}</Mono><span className="text-muted">{a.operator} · issued {ago(a.issued_at)}</span>
             {a.expired && <Pill tone="hold">expired · captures may still be on the phone</Pill>}
             {a.recovery_requested_at
-              ? <span className="ml-auto text-[11.5px] text-hold">Recovery requested · waiting for the physical reconciliation below</span>
+              ? <><span className="ml-auto text-[11.5px] text-hold">Recovery requested · waiting for the physical reconciliation below</span>
+                  <Button size="sm" disabled={!can('quality_manager')} onClick={() => { reset(); setRecovering(a) }}>Attach recount record…</Button></>
               : <><span className="ml-auto text-[11.5px] text-muted">End the offline session on the phone, or</span>
                   <Button size="sm" disabled={!can('quality_manager')} onClick={() => { reset(); setRecovering(a) }}>Recover lost device…</Button></>}
           </li>
@@ -87,11 +95,12 @@ function Reconciliation({ ship }: { ship: ShipView }) {
         <div className="space-y-3">
           <div className="rounded-lg bg-hold/10 px-3 py-2 text-[12px] text-ink-2">Use only when the phone is lost or unavailable. Its offline authority ends now, and nothing it captured is assumed synced. The truck stays blocked until the physical reconciliation is recorded: attach the recount record here, or a reconciliation task is raised for a quality engineer.</div>
           <Field label="Reason (audit, required)"><Textarea value={reason} onChange={e => setReason(e.target.value)} className="min-h-14" placeholder="e.g. Phone dropped and broken at Dock 3" /></Field>
-          <Field label="Reconciliation record (optional · PDF, JPEG or PNG)" hint="Stored as UPLOAD evidence and linked to the recovery.">
+          <Field label={recovering?.recovery_requested_at ? 'Reconciliation record (PDF, JPEG or PNG)' : 'Reconciliation record (optional · PDF, JPEG or PNG)'}
+                 hint="Upload the recount made for this recovery. Synthetic or earlier files are refused.">
             <input type="file" accept="application/pdf,image/jpeg,image/png" onChange={e => setRecord(e.target.files?.[0] ?? null)} className="block w-full text-[12px]" />
           </Field>
           {recover.error && <ErrorBox error={recover.error} />}
-          <Button variant="danger" className="w-full" disabled={reason.trim().length < 10} loading={recover.isPending} onClick={() => recover.mutate(undefined, { onSuccess: reset })}>{record ? 'Recover with reconciliation record' : 'Recover and raise reconciliation task'}</Button>
+          <Button variant="danger" className="w-full" disabled={reason.trim().length < 10 || (!!recovering?.recovery_requested_at && !record)} loading={recover.isPending} onClick={() => recover.mutate(undefined, { onSuccess: reset })}>{recovering?.recovery_requested_at ? 'Attach record and settle' : record ? 'Recover with reconciliation record' : 'Recover and raise reconciliation task'}</Button>
         </div>
       </Modal>
       <Modal open={!!doing} onClose={reset} title={`Disposition · ${doing?.package_label ?? 'crate'}`}>

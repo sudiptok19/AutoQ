@@ -56,7 +56,16 @@ def snapshot(shipment_id: str, device_id: str = Query(pattern=DEVICE), local_seq
 
 @router.post("/sync/scans")
 def sync(body: SyncIn, db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
-    return s.sync(db, p, body.device_id, body.snapshot_id, [e.model_dump() for e in body.events])
+    return s.sync(db, p, body.device_id, body.snapshot_id, [_event_dict(e) for e in body.events])
+
+
+def _event_dict(e: EventIn) -> dict:
+    """Keep the difference between an absent snapshot_id and an explicit null: under chain v2 the field is hashed, and
+    'absent' is a schema error, not 'no snapshot'."""
+    d = e.model_dump()
+    if "snapshot_id" not in e.model_fields_set:
+        del d["snapshot_id"]
+    return d
 
 
 HEX64 = r"^[0-9a-f]{64}$"

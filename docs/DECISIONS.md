@@ -68,3 +68,14 @@ Short entries. Newest at the bottom. Format: decision — why — tradeoff.
 34. **The phone checks that a label's signing key was valid when the label was signed.** The offline verifier now applies the server's rule (`passport_crypto._trusted_key`) to the keys in the signed snapshot. The label's `iat` must fall inside the key's `not_before`/`not_after`, an ACTIVE key must still be valid now, a RETIRED key still verifies labels it signed while valid, a revoked kid always fails, and duplicate or unknown-status kids are untrusted. A key with no validity window fails closed (KEY_EXPIRED). A label dated more than 2 minutes after the phone's clock fails as ISSUED_IN_FUTURE. The browser now runs Astra's `expired_active_key` interop vector as well.
 
     — Tradeoff: a phone whose clock is badly wrong can block valid labels offline. The scanner shows that as a key failure, with a hint to check the clock, rather than accepting the label.
+
+35. **Release blockers from Astra's independent verification (round 2).**
+    - **Departure re-checks the manifest.** Removing a crate from a CLOSED shipment reopens it (audited `MANIFEST_REOPENED`), so it must pass every close check again. Departure also repeats the empty-manifest and quantity checks itself.
+    - **A seal recheck counts only while it's fresh, at close and at departure too.** If the last INTACT recheck is older than `seal_recheck_max_age_minutes`, the result is `SEAL_RECHECK_EXPIRED`. That blocks without ordering an unload; the crate is rechecked on the truck.
+    - **Recovery evidence must be made for the recovery.** The recovery is requested first. A record settles it only if it is physical (`UPLOAD` or `LIVE_CAPTURE`, never `SYNTHETIC_TEST` or `PRERECORDED_EVAL`), stored after the request, uploaded by a QE/QM, and not already cited by another recovery. Otherwise the call fails with `EVIDENCE_NOT_LINKED`.
+    - **A refresh never supersedes a pending recovery.**
+    - **Sync ingress keeps "absent" apart from "null".** A v2 event without `snapshot_id` is a 422. A v1 explicit null is never replaced by the batch default.
+    - **Only a same-device, same-operator, same-shipment claim is stored as an association.** Any other claim is kept verbatim in `claimed_snapshot_id` only.
+    - **An SPC review links only the drift warning recorded for its own inspection** (`spc_warnings`). Otherwise it fails with `ALERT_NOT_LINKED`.
+
+    — Tradeoff: a truck that waits at the dock longer than the recheck window needs every crate rechecked before it can leave.

@@ -333,20 +333,42 @@ def _revalidate(db: Session, pkgs: list[m.Package], s: m.Shipment) -> list[dict]
     return problems
 
 
+def _manifest_blockers(db: Session, s: m.Shipment, pkgs: list[m.Package]) -> list[dict]:
+    """The manifest must still describe a real load: something on the truck, and the agreed quantity.
+    Checked at close AND at departure, because crates can come off a closed shipment (removal tasks)."""
+    out = []
+    loaded, exp = loaded_units(db, s.id), expected_units(db, s)
+    if not pkgs or loaded == 0:
+        out.append({"code": "EMPTY_MANIFEST", "message": "Nothing loaded"})
+    elif loaded != exp and not policies.settings_of(policies.active(db)).allow_partial_close:
+        out.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
+    return out
+
+
+def _seal_age_blockers(db: Session, pkgs: list[m.Package]) -> list[dict]:
+    """An INTACT recheck is evidence for a limited time only. A crate whose last recheck has aged out is not unloaded:
+    it is rechecked on the truck. (A recheck that is not INTACT is handled by _revalidate, which requires removal.)"""
+    max_age = policies.settings_of(policies.active(db)).seal_recheck_max_age_minutes
+    now, out = datetime.now(UTC), []
+    for pkg in pkgs:
+        chk = last_check(db, pkg)
+        if chk and chk.kind == "RECHECK" and chk.result == "INTACT" and now - chk.created_at > timedelta(minutes=max_age):
+            out.append({"code": "SEAL_RECHECK_EXPIRED", "package_id": pkg.id,
+                        "message": f"{pkg.label}: last INTACT recheck is older than {max_age} min — recheck the seal on the truck"})
+    return out
+
+
 def close(db: Session, p: Principal, shipment_key: str, unsynced: int = 0) -> dict:
     s0 = find_shipment(db, shipment_key)
     locks, pkgs, s = _lock_shipment_contents(db, s0)
     if s.status != "OPEN":
         raise ApiError(409, "MANIFEST_CLOSED", f"Shipment is {s.status}")
-    blockers = []
-    loaded, exp = loaded_units(db, s.id), expected_units(db, s)
-    if not pkgs:
-        blockers.append({"code": "EMPTY_MANIFEST", "message": "Nothing loaded"})
-    elif loaded != exp and not policies.settings_of(policies.active(db)).allow_partial_close:
-        blockers.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
+    blockers = _manifest_blockers(db, s, pkgs)
+    loaded = loaded_units(db, s.id)
     if unsynced:
         blockers.append({"code": "PROVISIONAL_PENDING", "message": f"{unsynced} offline scan(s) on this device are not synced yet"})
     blockers += _reconciliation_blockers(db, s)
+    blockers += _seal_age_blockers(db, pkgs)
     for prob in _revalidate(db, pkgs, s):
         blockers.append({"code": "LOADED_PACKAGE_BLOCKED", "message": f"{prob['label']}: {', '.join(b['code'] for b in prob['blockers'])} — unload required", "package_id": prob["package_id"]})
     if blockers:
@@ -377,7 +399,7 @@ def movement(db: Session, p: Principal, shipment_key: str, type: str, location: 
         if s.status != "CLOSED":
             raise ApiError(409, "MANIFEST_OPEN" if s.status == "OPEN" else "ALREADY_DEPARTED", f"Shipment is {s.status}; close the manifest first")
         t = _occurred(occurred_at, s.closed_at)
-        open_items_ = _reconciliation_blockers(db, s)
+        open_items_ = _manifest_blockers(db, s, pkgs) + _reconciliation_blockers(db, s) + _seal_age_blockers(db, pkgs)
         if open_items_:   # e.g. a late offline sync refused a crate after close: it must be dealt with before the truck leaves
             raise ApiError(409, "DEPARTURE_NOT_RECONCILED", "Shipment cannot depart", {"blockers": open_items_})
         problems = _revalidate(db, pkgs, s)

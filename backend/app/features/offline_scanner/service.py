@@ -166,7 +166,9 @@ def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, lo
     superseded = []
     if _queue_empty_at_head(dev, local_seq, local_head, pending):
         for old in db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.device_id == dev.id, m.OfflineSnapshot.shipment_id == s.id,
-                                                              m.OfflineSnapshot.settled_at.is_(None)).with_for_update().execution_options(populate_existing=True)):
+                                                              m.OfflineSnapshot.settled_at.is_(None),
+                                                              # a lost-device recovery settles only through physical reconciliation, never by refresh
+                                                              m.OfflineSnapshot.recovery_requested_at.is_(None)).with_for_update().execution_options(populate_existing=True)):
             _settle(db, old, "SUPERSEDED", p.id, dev, f"Refreshed by {sid} with an empty queue", now)
             superseded.append(old.id)
     db.add(m.OfflineSnapshot(id=sid, device_id=dev.id, shipment_id=s.id, operator_id=p.id, kid=kid, token=token, issued_at=now, expires_at=now + timedelta(seconds=ttl)))
@@ -214,14 +216,12 @@ def recover(db: Session, p: Principal, snapshot_id: str, reason: str, evidence_i
     sn = db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.id == snapshot_id).with_for_update().execution_options(populate_existing=True)).one()
     if sn.settled_at:
         raise ApiError(409, "SNAPSHOT_SETTLED", f"Already settled ({sn.settlement})", snapshot_view(db, sn))
-    evidence = []
-    for sha in dict.fromkeys(evidence_ids or []):
-        ev = db.get(m.Evidence, sha)
-        if not ev:
-            raise ApiError(422, "EVIDENCE_NOT_FOUND", f"Evidence {sha[:12]}… does not exist; upload the reconciliation record first")
-        evidence.append({"sha256": ev.sha256, "media_type": ev.media_type, "evidence_source": ev.evidence_source})
     now = datetime.now(UTC)
     first = sn.recovery_requested_at is None
+    if first and evidence_ids:
+        raise ApiError(409, "RECOVERY_NOT_REQUESTED", "Request the recovery first, then upload the physical reconciliation record made for it",
+                       snapshot_view(db, sn))
+    evidence = [_recovery_evidence(db, sn, sha) for sha in dict.fromkeys(evidence_ids or [])]
     if first:
         sn.recovery_requested_at = now
         sn.recovery_task_id = segregation.create(
@@ -250,6 +250,34 @@ def recover(db: Session, p: Principal, snapshot_id: str, reason: str, evidence_i
                     details={"device_id": dev.id, "snapshot_id": sn.id, "operator": db.get(m.User, dev.operator_id).username, "reason": reason},
                     dedupe_key=f"recover:{sn.id}")
     return snapshot_view(db, sn)
+
+
+# Evidence a person captured or uploaded as a record of the physical world. Synthetic and pre-recorded evaluation media never qualify.
+PHYSICAL_EVIDENCE_SOURCES = ("UPLOAD", "LIVE_CAPTURE")
+
+
+def _recovery_evidence(db: Session, sn: m.OfflineSnapshot, sha: str) -> dict:
+    """Evidence settles a recovery only if it was made FOR this recovery: physical (not synthetic), uploaded by a quality
+    engineer or manager after the recovery was requested, and not already cited by another recovery."""
+    ev = db.get(m.Evidence, sha)
+    if not ev:
+        raise ApiError(422, "EVIDENCE_NOT_FOUND", f"Evidence {sha[:12]}… does not exist; upload the reconciliation record first")
+    bad = lambda why: ApiError(422, "EVIDENCE_NOT_LINKED", f"Evidence {sha[:12]}… cannot settle this recovery: {why}",
+                               {"sha256": sha, "evidence_source": ev.evidence_source, "snapshot_id": sn.id})
+    if ev.evidence_source not in PHYSICAL_EVIDENCE_SOURCES:
+        raise bad(f"{ev.evidence_source} evidence is not a physical reconciliation record")
+    if ev.created_at < sn.recovery_requested_at:
+        raise bad("it was stored before this recovery was requested")
+    uploader = db.get(m.User, ev.created_by) if ev.created_by else None
+    roles = set(db.scalars(select(m.UserRole.role).where(m.UserRole.user_id == uploader.id))) if uploader else set()
+    if not roles & {"quality_engineer", "quality_manager"}:
+        raise bad("it was not uploaded by a quality engineer or manager")
+    other = db.scalars(select(m.OfflineSnapshot.id).where(m.OfflineSnapshot.id != sn.id,
+                                                          m.OfflineSnapshot.recovery_evidence.contains([{"sha256": sha}]))).first()
+    if other:
+        raise bad(f"it already settled the recovery of {other}")
+    return {"sha256": ev.sha256, "media_type": ev.media_type, "evidence_source": ev.evidence_source,
+            "uploaded_by": uploader.username, "uploaded_at": _iso(ev.created_at), "for_snapshot": sn.id}
 
 
 def complete_recovery(db: Session, p: Principal, task: m.SegregationTask, now: datetime) -> None:
@@ -298,8 +326,12 @@ def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, eve
             raise ApiError(422, "VALIDATION", f"local_decision must be one of {sorted(LOCAL)}")
         parse_capture_time(e["scanned_at"])
         if e.get("chain_version", 1) == 1:
-            e["snapshot_id"] = e.get("snapshot_id") or snapshot_id        # v1: the claim may come from the batch default
-        # v2: the snapshot id is inside the hash; the event's own value (null for ONLINE) is the claim, never a default
+            if "snapshot_id" not in e:                                    # v1: an ABSENT claim may come from the batch default;
+                e["snapshot_id"] = snapshot_id                            # an explicit null stays "no snapshot"
+        elif "snapshot_id" not in e:
+            # v2: the snapshot id is inside the hash; the event's own value (null for ONLINE) is the claim, never a default
+            raise ApiError(422, "VALIDATION", f"Event seq {e.get('seq')}: chain v2 requires an explicit snapshot_id (null for online scans)",
+                           {"seq": e.get("seq"), "field": "snapshot_id"})
     if snapshot_id:
         snap = db.get(m.OfflineSnapshot, snapshot_id)
         if not snap or snap.device_id != dev.id:
@@ -455,7 +487,10 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
                 raise_alert(db, type="OFFLINE_CONFLICT", severity="HIGH", entity_type="SHIPMENT", entity_id=view["shipment_id"], reason_codes=codes,
                             details={"client_event_id": e["client_event_id"], "device_id": device_id, "package": label, "task_id": task},
                             dedupe_key=f"offline-conflict:{e['client_event_id']}", audible=True)
-        valid_assoc = snap is not None and snap.device_id == device_id and snap.operator_id == p.id
+        # Only a claim that names this device's, this operator's snapshot FOR THIS SHIPMENT is stored as an association;
+        # anything else is kept verbatim in claimed_snapshot_id and nowhere else.
+        valid_assoc = snap is not None and ship is not None and snap.device_id == device_id and snap.operator_id == p.id \
+            and snap.shipment_id == ship.id
         db.add(m.DeviceEvent(device_id=device_id, seq=e["seq"], client_event_id=e["client_event_id"], prev_hash=e["prev_hash"], hash=e["hash"],
                              snapshot_id=snap.id if valid_assoc else None, claimed_snapshot_id=claim, claim_recorded=True, chain_version=version, scan_id=view["scan_id"] if view else None,
                              local_decision=ld, outcome=outcome, scanned_at=scanned_at, operator_id=p.id))

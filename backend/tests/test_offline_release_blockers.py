@@ -138,6 +138,7 @@ def upload(client, auth, who="qe.ananya"):
 def test_recovery_with_linked_reconciliation_evidence_settles_at_once(client, auth, db):
     *_, shp = loaded_online(client, auth, db)
     sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    assert recover(client, auth, sid).json()["recovery_requested_at"]                 # request first; the record is made for it
     assert recover(client, auth, sid, evidence=["0" * 64]).status_code == 422          # evidence must exist
     sha = upload(client, auth)
     rec = recover(client, auth, sid, evidence=[sha]).json()
