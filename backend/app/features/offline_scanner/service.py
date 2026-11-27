@@ -403,11 +403,15 @@ def _snapshot_reasons(db: Session, p: Principal, device_id: str, snap: m.Offline
     return [], signed
 
 
-def _version_reasons(dev: m.Device, version: int, floor: int) -> list[dict]:
-    """A recorded event below the floor, or below what this device already wrote (an outdated tab sharing its queue),
-    is kept for reconciliation but never confers load authority."""
+def _version_reasons(dev: m.Device, version: int, floor: int, writer: int = 1) -> list[dict]:
+    """A recorded event below the floor, below the plant's current writer (a legacy queue drained after the switch), or
+    below what this device already wrote (an outdated tab sharing its queue), is kept for reconciliation but never
+    confers load authority. Already-synced events replay exactly as first recorded."""
     if version < floor:
         return [{"code": "CHAIN_VERSION_BELOW_FLOOR", "message": f"Captured by a v{version} writer; the plant requires v{floor} — update the scanner"}]
+    if version < writer:
+        return [{"code": "CHAIN_VERSION_BELOW_WRITER", "message": f"Captured by a v{version} writer after the plant switched to v{writer}; "
+                                                                "verify the crate physically"}]
     if version < dev.chain_version_high:
         return [{"code": "CHAIN_VERSION_REGRESSION", "message": f"v{version} event after this device already wrote v{dev.chain_version_high} (outdated tab?)"}]
     return []
@@ -449,7 +453,8 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
         # Read the version floor under the policy lock (shared): a floor change waits for this decision, never splits it.
         db.execute(text("SELECT pg_advisory_xact_lock_shared(:k)"), {"k": policies.POLICY_LOCK})
         version = e.get("chain_version", 1)
-        below_floor = _version_reasons(dev, version, policies.settings_of(policies.active(db)).offline.chain_min_version)
+        chain_pol = policies.settings_of(policies.active(db)).offline
+        below_floor = _version_reasons(dev, version, chain_pol.chain_min_version, chain_pol.chain_writer_version)
         scanned_at = parse_capture_time(e["scanned_at"])
         claim = e.get("snapshot_id")
         snap = db.get(m.OfflineSnapshot, claim) if claim else None

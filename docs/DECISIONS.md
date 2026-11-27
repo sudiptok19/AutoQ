@@ -78,4 +78,7 @@ Short entries. Newest at the bottom. Format: decision — why — tradeoff.
     - **Only a same-device, same-operator, same-shipment claim is stored as an association.** Any other claim is kept verbatim in `claimed_snapshot_id` only.
     - **An SPC review links only the drift warning recorded for its own inspection** (`spc_warnings`). Otherwise it fails with `ALERT_NOT_LINKED`.
 
-    — Tradeoff: a truck that waits at the dock longer than the recheck window needs every crate rechecked before it can leave.
+    - **The device-chain floor never goes down.** A publish that lowers `offline.chain_min_version` fails with `POLICY_FLOOR_DOWNGRADE`.
+    - **A legacy queue drained after the writer switch has no load authority.** A first-time provisional event hashed below the current writer version is a CONFLICT (`CHAIN_VERSION_BELOW_WRITER`) with a segregation task. Already-synced events replay exactly as first recorded.
+
+    — Tradeoff: a truck that waits at the dock longer than the recheck window needs every crate rechecked before it can leave. Phones must sync, or end their offline sessions, before the writer switch; otherwise their queued v1 loads come back as physical checks.

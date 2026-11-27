@@ -176,3 +176,30 @@ def test_spc_review_links_only_the_drift_warning_for_its_own_inspection(client, 
     assert r.status_code == 422 and r.json()["error"]["code"] == "ALERT_NOT_LINKED"
     ok = client.post(f"{API}/spc-reviews", json={"inspection_id": warn.inspection_id, "alert_id": warn.alert_id}, headers=auth("qe.ananya"))
     assert ok.status_code in (200, 201) and ok.json()["alert_id"] == warn.alert_id
+
+
+# ── 8. version floor downgrade after cutover ───────────────────────────────────────────────────────────────────
+def test_the_chain_floor_cannot_be_lowered_after_cutover(client, auth, db):
+    from tests.test_chain_v2 import set_chain_policy
+    set_chain_policy(db, 2, 2)
+    current = client.get(f"{API}/policies", headers=auth("admin")).json()["settings"]
+    current["offline"]["chain_min_version"] = 1
+    r = client.put(f"{API}/policies", headers=auth("admin"), json=current)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "POLICY_FLOOR_DOWNGRADE"
+    assert client.get(f"{API}/policies", headers=auth("admin")).json()["settings"]["offline"]["chain_min_version"] == 2
+
+
+# ── 9. legacy queue drained after the writer switch ────────────────────────────────────────────────────────────
+def test_a_v1_provisional_event_first_received_after_the_writer_switch_cannot_load(client, auth, db):
+    from tests.test_chain_v2 import ev, set_chain_policy
+    _, _, _, a, _, shp = setup(client, auth, db)
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    set_chain_policy(db, 2, 1)
+    queued = ev("dev-a1", 1, GEN, a["token"], shp["id"], "PROVISIONAL_ACCEPT", snapshot_id=sid)
+    res = sync(client, auth, "dev-a1", sid, [queued]).json()
+    assert res["chain"]["server_seq"] == 1
+    r = res["results"][0]
+    assert r["outcome"] == "CONFLICT" and r["segregation_task_id"] and "CHAIN_VERSION_BELOW_WRITER" in r["note"]
+    assert db.scalar(select(m.Load.id)) is None
+    again = sync(client, auth, "dev-a1", sid, [queued]).json()["results"][0]                 # exact historical replay
+    assert again["outcome"] == "DUPLICATE" and again["original_outcome"] == "CONFLICT"
