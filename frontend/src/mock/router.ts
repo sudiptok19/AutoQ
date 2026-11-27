@@ -71,6 +71,7 @@ r('POST', '/auth/login', ({ body }) => {
   return { access_token: `mock.${u.username}`, user: u }
 })
 r('GET', '/auth/me', c => need(c))
+const unix = (iso: string) => Math.floor(Date.parse(iso) / 1000)
 r('GET', '/health', () => ({ status: 'ok', db: 'mock', key_kid: S.keys[0].kid, version: 'mock-0.1' }))
 r('POST', '/demo/reset', async c => { need(c, 'admin', 'quality_manager'); await seed(); return { ok: true } })
 
@@ -159,10 +160,12 @@ r('POST', '/inspections/:id/review', c => {
 })
 
 /* ── crypto ── */
-r('GET', '/keys', () => ({ keys: S.keys.map(({ priv: _p, ...k }) => ({ ...k, alg: 'Ed25519' })) }))
+// Same shape as the real API: validity window in Unix seconds.
+const publicKeys = () => S.keys.map(({ priv: _p, ...k }) => ({ ...k, alg: 'Ed25519', not_before: unix(k.not_before), not_after: unix(k.not_after) }))
+r('GET', '/keys', () => ({ keys: publicKeys() }))
 r('POST', '/verify', async c => {
   need(c)
-  const v = await verifyToken(String(c.body?.token ?? ''), S.keys)
+  const v = await verifyToken(String(c.body?.token ?? ''), publicKeys())
   const p: any = v.payload
   let exists = false, status: string | null = null, elig: Eligibility | null = null
   if (v.ok && p.typ === 'PP') { const pp = S.passports.find(x => x.id === p.id); exists = !!pp; status = pp?.status ?? null; if (pp) elig = eligibility(unit(pp.unit_id)) }
@@ -304,7 +307,7 @@ export async function runGate(s: Shipment, token: string, actor: string, client_
   const add = (gate: GateCheck['gate'], status: GateCheck['status'], detail?: string, code?: string, msg?: string) => {
     checks.push({ gate, status, detail }); if (code && status === 'FAIL') reasons.push({ code, message: msg ?? detail ?? code })
   }
-  const v = await verifyToken(token, S.keys)
+  const v = await verifyToken(token, publicKeys())
   const p: any = v.payload
   let pkg: Package | undefined
   if (!v.ok && (v.code === 'TOKEN_MALFORMED' || v.code === 'SIG_INVALID')) add('SIGNATURE', 'FAIL', v.code === 'SIG_INVALID' ? 'Ed25519 signature does not match payload' : 'Not an AQ1 token', v.code)
@@ -680,7 +683,7 @@ r('GET', '/offline/snapshot', async c => {
   const ttl = S.policies.snapshot_ttl_minutes * 60
   const allowed = S.packages.filter(p => p.order_id === s.order_id && !shipmentOfPkg(p.id)).map(p => p.id)
   const held = S.packages.filter(p => p.held || p.unit_ids.some(u => containmentsFor(unit(u)).length || unit(u).held)).map(p => p.id)
-  const token = await sign({ typ: 'SNAP', id: nextId('snap'), exp: Math.floor(Date.now() / 1000) + ttl, shipment: s.id, order: s.order_id, expected_units: remainingQty(s), allowed_packages: allowed, held, revoked_kids: S.keys.filter(k => k.status === 'REVOKED').map(k => k.kid), keys: S.keys.filter(k => k.status !== 'REVOKED').map(k => ({ kid: k.kid, public_key: k.public_key })) })
+  const token = await sign({ typ: 'SNAP', id: nextId('snap'), exp: Math.floor(Date.now() / 1000) + ttl, shipment: s.id, order: s.order_id, expected_units: remainingQty(s), allowed_packages: allowed, held, revoked_kids: S.keys.filter(k => k.status === 'REVOKED').map(k => k.kid), keys: publicKeys().filter(k => k.status !== 'REVOKED').map(({ kid, public_key, status, not_before, not_after }) => ({ kid, public_key, status, not_before, not_after })) })
   return { token }
 })
 // Settlement/recovery are enforced by the live backend; the mock accepts them so the scanner flow works offline-only.

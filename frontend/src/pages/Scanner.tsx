@@ -8,9 +8,9 @@ import { Brand } from '../layout/AppShell'
 import { Button, Honesty, Mono, Pill, Status, cx, ago, fmtTime } from '../components/ui'
 import { GateChecklist, Reasons } from '../components/domain'
 import { QrCamera } from '../scanner/QrCamera'
-import { decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload, type StoredSnapshot, type SyncResult } from '../scanner/offline'
+import { CLOCK_SKEW_SEC, decideLocally, reconciledStatus, snapshotFor, type QueuedScan, type SnapPayload, type StoredSnapshot, type SyncResult } from '../scanner/offline'
 import { appendScan, applyChainPolicy, chainPolicy, chainWriter, deleteSnapshot, deviceInfo, getPref, getSnapshot, listQueue, putSnapshot, setPref, updateScan, type ChainPolicy } from '../scanner/store'
-import { decodeTokenUnsafe, verifyToken } from '../lib/token'
+import { decodeTokenUnsafe, verifyToken, type PublicKey } from '../lib/token'
 import { verifyChain } from '../lib/chain'
 
 type ShipView = Shipment & { expected_units: number; loaded_units: number }
@@ -104,10 +104,10 @@ export default function Scanner() {
       const pendingNow = q.filter(x => !x.synced_at).length
       const [{ token, chain: policy }, { keys }, pk] = await Promise.all([
         api.get<{ token: string; chain?: ChainPolicy }>(`/offline/snapshot?shipment_id=${shipId}&device_id=${encodeURIComponent(info.device_id)}&local_seq=${info.seq}&local_head=${info.head}&pending=${pendingNow}`),
-        api.get<{ keys: { kid: string; public_key: string; status: string }[] }>('/keys'),
+        api.get<{ keys: PublicKey[] }>('/keys'),
         api.get<{ items: Package[] }>('/packages'),
       ])
-      const v = await verifyToken(token, keys)
+      const v = await verifyToken(token, keys, { asOf: Math.floor(Date.now() / 1000), skewSec: CLOCK_SKEW_SEC })
       if (!v.ok || v.payload.typ !== 'SNAP') throw new Error(`Snapshot signature check failed (${v.ok ? 'wrong type' : v.code})`)
       const payload = v.payload as SnapPayload
       const demo_labels = pk.items.filter(p => p.token && ['SEALED', 'SEAL_REVIEW', 'LOADED'].includes(p.state)).map(p => ({ id: p.id, label: p.label, token: p.token! }))

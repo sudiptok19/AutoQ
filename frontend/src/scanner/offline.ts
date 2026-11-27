@@ -57,6 +57,9 @@ export function reflectedIn(q: Pick<QueuedScan, 'local_decision' | 'scanned_at' 
   return Number.isFinite(committed) && committed < downloadedAtMs
 }
 
+/** Device clocks are trusted to within this much (same tolerance as snapshot edges). */
+export const CLOCK_SKEW_SEC = 120
+
 export async function decideLocally(token: string, snap: SnapPayload, queue: QueuedScan[], nowSec: number, downloadedAtMs?: number): Promise<LocalResult> {
   const checks: GateCheck[] = [], reasons: Reason[] = []
   const fail = (gate: GateCheck['gate'], code: string, detail: string) => { checks.push({ gate, status: 'FAIL', detail }); reasons.push({ code, message: detail }) }
@@ -65,13 +68,16 @@ export async function decideLocally(token: string, snap: SnapPayload, queue: Que
   const fresh = nowSec < snap.exp
   if (!fresh) reasons.push({ code: 'SNAPSHOT_STALE', message: `Offline snapshot expired ${Math.round((nowSec - snap.exp) / 60)} min ago — reconnect to refresh` })
 
-  const keys = snap.keys.map(k => ({ ...k, status: snap.revoked_kids.includes(k.kid) ? 'REVOKED' : 'ACTIVE' }))
-  const v = await verifyToken(token, keys)
+  // Keep each key's own status (a RETIRED key still verifies labels it signed while valid); revocation wins.
+  const keys = snap.keys.map(k => ({ ...k, status: snap.revoked_kids.includes(k.kid) ? 'REVOKED' : (k.status ?? 'ACTIVE') }))
+  const v = await verifyToken(token, keys, { asOf: nowSec, skewSec: CLOCK_SKEW_SEC })
   const p: any = v.payload
   if (!v.ok && (v.code === 'TOKEN_MALFORMED' || v.code === 'SIG_INVALID')) fail('SIGNATURE', v.code, v.code === 'SIG_INVALID' ? 'Ed25519 signature does not match payload' : 'Not an AQ1 token')
-  else pass('SIGNATURE', 'Ed25519 · verified on device')
+  else if (v.ok || v.code === 'ISSUED_IN_FUTURE') pass('SIGNATURE', 'Ed25519 · verified on device')
   if (!v.ok && (v.code === 'KEY_UNKNOWN' || v.code === 'KEY_REVOKED')) fail('KEY', v.code, `kid ${v.kid} not trusted in snapshot`)
-  else if (v.ok) pass('KEY', `kid ${v.kid} (cached)`)
+  else if (!v.ok && v.code === 'KEY_EXPIRED') fail('KEY', v.code, `kid ${v.kid} was not valid when this label was signed (or has expired)`)
+  else if (!v.ok && v.code === 'ISSUED_IN_FUTURE') fail('KEY', v.code, 'Label claims to be signed after this device\'s time — check the phone clock')
+  else if (v.ok) pass('KEY', `kid ${v.kid} · valid at signing (cached)`)
 
   const label = (p?.label as string) ?? null
   const units = Array.isArray(p?.items) ? p.items.length : 0
