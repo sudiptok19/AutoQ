@@ -8,8 +8,8 @@ import { appendScan, listQueue, updateScan } from './store'
 async function fixture() {
   const k = await newKeyPair()
   const pkg = (id: string, order = 'ord_1', items = 8) => signToken({ v: 1, typ: 'PKG', kid: 'k1', id, iat: 1, label: id.toUpperCase(), order, items: Array.from({ length: items }, (_, i) => `pp_${id}_${i}`) }, k.priv)
-  const snap: SnapPayload = { v: 1, typ: 'SNAP', kid: 'k1', id: 'snap_1', iat: 1000, exp: 2000, shipment: 'shp_1', order: 'ord_1', expected_units: 16, allowed_packages: ['pkg_a', 'pkg_b', 'pkg_c', 'pkg_h'], held: ['pkg_h'], revoked_kids: [], keys: [{ kid: 'k1', public_key: k.pub }] }
-  return { pkg, snap }
+  const snap: SnapPayload = { v: 1, typ: 'SNAP', kid: 'k1', id: 'snap_1', iat: 1000, exp: 2000, shipment: 'shp_1', order: 'ord_1', expected_units: 16, allowed_packages: ['pkg_a', 'pkg_b', 'pkg_c', 'pkg_h'], held: ['pkg_h'], revoked_kids: [], keys: [{ kid: 'k1', public_key: k.pub, status: 'ACTIVE', not_before: 0, not_after: 5000 }] }
+  return { k, pkg, snap }
 }
 const q = (over: Partial<QueuedScan>): QueuedScan => ({ client_event_id: 'x', seq: 1, prev_hash: '', hash: '', token: '', shipment_id: 'shp_1', scanned_at: '', local_decision: 'PROVISIONAL_ACCEPT', local_reasons: [], local_checks: [], package_id: null, package_label: null, units: 8, status: 'PENDING', ...over })
 
@@ -28,8 +28,46 @@ describe('decideLocally', () => {
     expect(await codes(await pkg('pkg_a'), [q({ package_id: 'pkg_a' })])).toContain('ALREADY_SCANNED_LOCALLY')
     expect(await codes(await pkg('pkg_c'), [q({ package_id: 'pkg_a' }), q({ package_id: 'pkg_b' })])).toContain('ORDER_QTY_EXCEEDED')
     const t = await pkg('pkg_a'); const [h, , s] = t.split('.')
-    expect(await codes(`${h}.${btoa('{"id":"pkg_a","kid":"k1"}').replace(/=+$/, '')}.${s}`)).toContain('SIG_INVALID')
+    expect(await codes(`${h}.${btoa('{"iat":1,"id":"pkg_a","kid":"k1"}').replace(/=+$/, '')}.${s}`)).toContain('SIG_INVALID')
     expect(await codes(await pkg('pkg_a'), [], 2100)).toContain('SNAPSHOT_STALE')
+  })
+})
+
+describe('label signing-key validity (offline)', () => {
+  const label = (k: { priv: Uint8Array }, iat: number) => signToken({ v: 1, typ: 'PKG', kid: 'k1', id: 'pkg_a', iat, label: 'PKG_A', order: 'ord_1', items: ['pp_1'] }, k.priv)
+  const codes = async (snap: SnapPayload, t: string, now = 1500) => (await decideLocally(t, snap, [], now)).reasons.map(r => r.code)
+
+  it('blocks a label signed before the key became valid', async () => {
+    const { k, snap } = await fixture()
+    const s = { ...snap, keys: [{ ...snap.keys[0], not_before: 500 }] }
+    expect(await codes(s, await label(k, 100))).toContain('KEY_EXPIRED')
+    expect(await codes(s, await label(k, 600))).not.toContain('KEY_EXPIRED')
+  })
+  it('blocks a label signed after the key expired', async () => {
+    const { k, snap } = await fixture()
+    const s = { ...snap, keys: [{ ...snap.keys[0], status: 'RETIRED', not_after: 800 }] }
+    expect(await codes(s, await label(k, 900))).toContain('KEY_EXPIRED')
+  })
+  it('still accepts a RETIRED key for labels it signed while valid, but not an expired ACTIVE key', async () => {
+    const { k, snap } = await fixture()
+    const retired = { ...snap, keys: [{ ...snap.keys[0], status: 'RETIRED', not_after: 1200 }] }
+    expect((await decideLocally(await label(k, 1100), retired, [], 1500)).decision).toBe('PROVISIONAL_ACCEPT')
+    const active = { ...snap, keys: [{ ...snap.keys[0], not_after: 1200 }] }
+    expect(await codes(active, await label(k, 1100))).toContain('KEY_EXPIRED')
+  })
+  it('fails closed when the snapshot key has no validity window', async () => {
+    const { k, snap } = await fixture()
+    const s = { ...snap, keys: [{ kid: 'k1', public_key: snap.keys[0].public_key }] }
+    expect(await codes(s, await label(k, 1100))).toContain('KEY_EXPIRED')
+  })
+  it('blocks a label dated after the device clock beyond the allowed skew', async () => {
+    const { k, snap } = await fixture()
+    expect(await codes(snap, await label(k, 1500 + 60))).not.toContain('ISSUED_IN_FUTURE')
+    expect(await codes(snap, await label(k, 1500 + 300))).toContain('ISSUED_IN_FUTURE')
+  })
+  it('a revoked kid still wins over a valid window', async () => {
+    const { k, snap } = await fixture()
+    expect(await codes({ ...snap, revoked_kids: ['k1'] }, await label(k, 1100))).toContain('KEY_REVOKED')
   })
 })
 

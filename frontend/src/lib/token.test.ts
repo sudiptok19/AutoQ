@@ -23,6 +23,19 @@ describe('AQ1 tokens', () => {
     expect(await verifyToken(t, [])).toMatchObject({ ok: false, code: 'KEY_UNKNOWN' })
     expect(await verifyToken(t, [{ ...keys[0], status: 'REVOKED' }])).toMatchObject({ ok: false, code: 'KEY_REVOKED' })
   })
+  it('with asOf, enforces the key validity window at signing and now; duplicate kids are untrusted', async () => {
+    const k = await newKeyPair()
+    const key = { kid: 'k1', public_key: k.pub, status: 'ACTIVE', not_before: 100, not_after: 200 }
+    const at = (iat: number) => signToken({ v: 1, typ: 'PP', kid: 'k1', id: 'pp_1', iat }, k.priv)
+    expect((await verifyToken(await at(150), [key], { asOf: 160 })).ok).toBe(true)
+    expect(await verifyToken(await at(50), [key], { asOf: 160 })).toMatchObject({ ok: false, code: 'KEY_EXPIRED' })
+    expect(await verifyToken(await at(150), [key], { asOf: 250 })).toMatchObject({ ok: false, code: 'KEY_EXPIRED' })
+    expect((await verifyToken(await at(150), [{ ...key, status: 'RETIRED' }], { asOf: 250 })).ok).toBe(true)
+    expect(await verifyToken(await at(150), [key, key], { asOf: 160 })).toMatchObject({ ok: false, code: 'KEY_UNKNOWN' })
+    expect(await verifyToken(await at(150), [{ ...key, status: 'WEIRD' }])).toMatchObject({ ok: false, code: 'KEY_UNKNOWN' })
+    expect(await verifyToken(await at(190), [key], { asOf: 160 })).toMatchObject({ ok: false, code: 'ISSUED_IN_FUTURE' })
+    expect((await verifyToken(await at(190), [key], { asOf: 160, skewSec: 30 })).ok).toBe(true)
+  })
 })
 
 describe('forgeToken', () => {
