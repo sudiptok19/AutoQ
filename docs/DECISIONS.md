@@ -64,3 +64,7 @@ Short entries. Newest at the bottom. Format: decision — why — tradeoff.
 
     — Tradeoff: unsampled same-line lots stay unresolved instead of being held "just in case".
 
+
+34. **The phone checks that a label's signing key was valid when the label was signed.** The offline verifier now applies the server's rule (`passport_crypto._trusted_key`) to the keys in the signed snapshot. The label's `iat` must fall inside the key's `not_before`/`not_after`, an ACTIVE key must still be valid now, a RETIRED key still verifies labels it signed while valid, a revoked kid always fails, and duplicate or unknown-status kids are untrusted. A key with no validity window fails closed (KEY_EXPIRED). A label dated more than 2 minutes after the phone's clock fails as ISSUED_IN_FUTURE. The browser now runs Astra's `expired_active_key` interop vector as well.
+
+    — Tradeoff: a phone whose clock is badly wrong can block valid labels offline. The scanner shows that as a key failure, with a hint to check the clock, rather than accepting the label.

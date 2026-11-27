@@ -38,6 +38,16 @@ Sign in with any dev account (password `autoq-dev`). The header shows **LIVE** w
 
 All images and the profile calibration are **SYNTHETIC_TEST**, and the UI badges them. Seal rechecks expire after 60 min, so reseed shortly before presenting.
 
+**Demo script (about 5 minutes).** Reseed first. Open the control room as `qm.farhan` on the laptop, and keep a second window ready for each other role.
+1. **Inspection** (`op.ravi`, Inspect): a good part passes and gets a signed passport, badged synthetic. A cracked part is rejected. A blurry capture becomes HOLD. On Line 3, under the active 4M containment, a passing part gets **no** passport, and the screen says why.
+2. **Dispatch gate** (`disp.kiran`, Dispatch, `SHP-0004`): `PKG-0004` loads. `PKG-0005` is refused until its seal is rechecked. `PKG-0006` (torn seal) is refused. A forged label fails the signature check, and the alert reaches the control room live, with the siren.
+3. **Offline scanner** (phone, `/scanner`): download a snapshot, go offline and scan. Each decision is shown as **PROVISIONAL_OFFLINE**, and the label signature and key validity are checked on the phone. Reconnect to sync, then end the offline session so the shipment can close.
+4. **Recall** (`qm.farhan`, Trace `H-7781`): the preview writes nothing; executing it quarantines every affected unit and package in one step. Draft the 8D: each statement is labelled and cites its evidence. Approval needs an uploaded review record, and then the PDF downloads.
+5. **SPC** (`qe.ananya`, then `qm.farhan`): investigate the Line 2 drift alert. On synthetic data the honest answer is INSUFFICIENT_EVIDENCE, and the manager rejects it with a reason.
+6. **Audit** (`admin`): the hash chain still verifies after the whole story.
+
+What to say out loud: a signature proves the data, not the physical part. The anomaly score is not a probability. Offline decisions are provisional until the server accepts them.
+
 **Mock mode (no backend):** `make frontend` runs everything in the browser against an in-memory mock API.
 
 **End-to-end tests (Playwright):**
