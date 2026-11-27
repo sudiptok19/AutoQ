@@ -170,6 +170,17 @@ Recomputing all three SHA-256 links from the six canonical scan fields matched e
 
 Astra led the integration and independently verified the database, signing key, LAN TLS identity and candidate build through Caddy. GPT-6.2 Sol at High effort verified the persisted scan, prepared the synthetic fixture and drafted this report. GPT-6.2 Sol at Extra High effort ran the isolated backend, frontend and Chromium checks. GPT-6.2 Sol independently recomputed the persisted device chain for closeout. GPT-6.2 Astra at High effort reviewed the scanner decision-card lifecycle and the snapshot integration boundaries.
 
+#### Integrated candidate acceptance
+
+Pin the backend and frontend to the same full commit in a dedicated checkout. Record its Git tree and database revision alongside each run. Evidence from a tree-identical commit carries forward. Record any later code delta before applying previous results to it.
+
+- **Disposable preflight.** Use an isolated PostgreSQL instance with a fresh container, loopback port, database credentials, signing key and evidence directory. Use a fresh Chromium context and separate local API and frontend ports. Keep the phone and the physical-verification database outside the test fixture. Restore a copy of the physical database only for the separate migration and restoration rehearsal.
+- **Offline synchronization.** Queue 201 events on a v2 writer. Let events 1–200 reconcile, then interrupt event 201 before submission. Retry event 201 and suppress the reply after it commits. The same event must remain pending until acknowledged. A final retry must return its original outcome and task, preserve the server head and leave exactly one durable task for the conflict. Check the accepted load and queue counts independently.
+- **Offline AQ1 labels.** Run the shared interop vectors, token tests and scanner tests. Cover signing-time bounds, an expired active key, a retired key that signed while authorized, a revoked key, missing validity metadata, duplicate keys and phone clock skew.
+- **Physical boundary.** Schedule the retained Vivo after the integrated regressions and restoration rehearsal pass. Keep the installed origin, device identity and historical checkpoint. Confirm the first v2 event extends the committed v1 head. Verify settlement by sequence and hash, real package-location evidence for recovery and a departure authorized by the plant server.
+
+Opus owns permanent placement of transactional coverage under the backend integration tests and the browser regression under e2e. A4 retains the pure digest and AQ1 vectors. A7 retains the physical acceptance record and this procedure.
+
 ## Renew the leaf and remove test trust
 
 When the LAN IP or hostname changes, rerun the `mkcert` leaf command with the new SANs, then recreate Caddy so Docker mounts the current files. Phones can keep the same root if the leaf was signed by the same mkcert CA.
