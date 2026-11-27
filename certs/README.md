@@ -174,6 +174,8 @@ Astra led the integration and independently verified the database, signing key, 
 
 Pin the backend and frontend to the same full commit in a dedicated checkout. Record its Git tree and database revision alongside each run. Evidence from a tree-identical commit carries forward. Record any later code delta before applying previous results to it.
 
+The [independent acceptance bundle](../datasets/acceptance/README.md) provides the portable runner, expected baseline failures and macOS setup.
+
 - **Disposable preflight.** Use an isolated PostgreSQL instance with a fresh container, loopback port, database credentials, signing key and evidence directory. Use a fresh Chromium context and separate local API and frontend ports. Keep the phone and the physical-verification database outside the test fixture. Restore a copy of the physical database only for the separate migration and restoration rehearsal.
 - **Offline synchronization.** Queue 201 events on a v2 writer. Let events 1–200 reconcile, then interrupt event 201 before submission. Retry event 201 and suppress the reply after it commits. The same event must remain pending until acknowledged. A final retry must return its original outcome and task, preserve the server head and leave exactly one durable task for the conflict. Check the accepted load and queue counts independently.
 - **Offline AQ1 labels.** Run the shared interop vectors, token tests and scanner tests. Cover signing-time bounds, an expired active key, a retired key that signed while authorized, a revoked key, missing validity metadata, duplicate keys and phone clock skew.
