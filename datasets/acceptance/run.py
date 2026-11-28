@@ -78,7 +78,13 @@ def disposable_postgres(env):
         POSTGRES_IMAGE,
     ], env=env)
     try:
-        binding = output([*docker, "port", container_id, "5432/tcp"], env=env)
+        binding = ""
+        for _ in range(20):
+            # Docker Desktop can return from run before the loopback mapping appears.
+            binding = output([*docker, "port", container_id, "5432/tcp"], env=env)
+            if binding:
+                break
+            time.sleep(0.25)
         match = re.fullmatch(r"127\.0\.0\.1:(\d+)", binding)
         if not match:
             raise RuntimeError("Disposable PostgreSQL must bind one IPv4 loopback port")

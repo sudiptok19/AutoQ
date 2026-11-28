@@ -59,3 +59,5 @@ Source-review items still require separate runtime tests. These include concurre
 ## Permanent placement
 
 Opus owns integration of the backend assertions into the current offline, dispatch, recall and SPC suites, and the browser case into the mounted scanner E2E suite. This bundle is an independent, opt-in baseline. It is outside default test discovery and carries no plant runtime records.
+
+The [PR #45 review](PR45_REVIEW.md) records the new two-step recovery, race and historical replay cases. The `r2` selector targets only those additional cases.
