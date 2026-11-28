@@ -519,6 +519,23 @@ class OfflineSnapshot(Base):
     recovery_evidence: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
 
 
+class RecoveryRecord(Base):
+    """A physical reconciliation record made for ONE pending recovery (task, snapshot and shipment), attested by a quality
+    engineer or manager. Created in the same transaction that completes the task and settles the snapshot; the digest is
+    the primary key, so one record can never settle two recoveries."""
+    __tablename__ = "recovery_records"
+    __table_args__ = (CheckConstraint("disposition IN ('MATCHES_MANIFEST', 'DISCREPANCY_SEGREGATED')", name="ck_recovery_records_disposition"),)
+    sha256: Mapped[str] = mapped_column(ForeignKey("evidence.sha256"), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("offline_snapshots.id"), unique=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("segregation_tasks.id"))
+    shipment_id: Mapped[str] = mapped_column(ForeignKey("shipments.id"))
+    attested_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    disposition: Mapped[str] = mapped_column(String(24))
+    counted_scope: Mapped[dict] = mapped_column(JSONB)
+    manifest: Mapped[list] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(Ts, server_default=now)
+
+
 class DeviceEvent(Base):
     __tablename__ = "device_events"
     __table_args__ = (_enum("outcome", "ACCEPTED", "BLOCKED", "DUPLICATE", "CONFLICT"),)

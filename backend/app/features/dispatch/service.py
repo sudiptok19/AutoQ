@@ -252,6 +252,18 @@ def evaluate(db: Session, locks: LockSet, s0: m.Shipment, token: str, now: datet
     return g, pkg, units, s
 
 
+def _replay(db: Session, p: Principal, prior: m.Scan, content: str, device_id: str | None, offline: bool) -> dict:
+    """A scan already owns this client_event_id. Only the SAME request may replay it: same shipment+token, same actor,
+    same device and same origin (online request vs offline sync). Anything else is a different capture that must not
+    inherit the recorded decision, whichever transaction won the insert."""
+    if prior.content_sha256 != content:
+        raise ApiError(409, "EVENT_ID_REUSED", "client_event_id already used for a different scan", {"recorded_scan": prior.id})
+    if prior.actor_id != p.id or prior.device_id != device_id or bool(prior.offline) != offline:
+        raise ApiError(409, "EVENT_PROVENANCE_MISMATCH", "client_event_id belongs to a scan recorded by another request; it is not replayed",
+                       {"recorded_scan": prior.id, "recorded_origin": "OFFLINE_SYNC" if prior.offline else "ONLINE"})
+    return scan_view(db, prior, replay=True)
+
+
 def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_id: str, device_id: str | None, *, offline: bool = False,
          captured_at: datetime | None = None, commit_load: bool = True,
          authorize: Callable[[m.Package | None], list[dict]] | None = None) -> tuple[dict, bool]:
@@ -262,9 +274,7 @@ def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_
     content = content_sha(s0.id, token)
     prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == client_event_id)).first()
     if prior:
-        if prior.content_sha256 != content:
-            raise ApiError(409, "EVENT_ID_REUSED", "client_event_id already used for a different scan")
-        return scan_view(db, prior, replay=True), False
+        return _replay(db, p, prior, content, device_id, offline), False
     now = datetime.now(UTC)
     locks = lock_set(db)
     g, pkg, units, s = evaluate(db, locks, s0, token, now)
@@ -281,9 +291,7 @@ def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_
             db.flush()
     except IntegrityError:  # a concurrent request with the same client_event_id won the insert
         prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == client_event_id)).one()
-        if prior.content_sha256 != content:
-            raise ApiError(409, "EVENT_ID_REUSED", "client_event_id already used for a different scan")
-        return scan_view(db, prior, replay=True), False
+        return _replay(db, p, prior, content, device_id, offline), False
     if accepted:
         db.add(m.Load(id=new_id("load"), package_id=pkg.id, shipment_id=s.id, accepted_scan_id=sc.id, unit_count=len(units)))
         pkg.state = "LOADED"

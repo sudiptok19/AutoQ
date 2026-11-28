@@ -688,7 +688,8 @@ r('GET', '/offline/snapshot', async c => {
 })
 // Settlement/recovery are enforced by the live backend; the mock accepts them so the scanner flow works offline-only.
 r('POST', '/offline/snapshots/:id/settle', c => { need(c, 'dispatcher'); return { snapshot_id: c.params[0], settlement: 'ACKNOWLEDGED' } })
-r('POST', '/offline/snapshots/:id/recover', c => { need(c, 'quality_manager'); return { snapshot_id: c.params[0], settlement: 'RECOVERED' } })
+r('POST', '/offline/snapshots/:id/recover', c => { need(c, 'quality_manager'); return { snapshot_id: c.params[0], settlement: null, recovery_requested_at: new Date().toISOString() } })
+r('POST', '/offline/snapshots/:id/recovery-record', c => { need(c, 'quality_engineer', 'quality_manager'); return { snapshot_id: c.params[0], settlement: 'RECOVERED' } })
 r('POST', '/sync/scans', async c => {
   const user = need(c, 'dispatcher')
   const results = []

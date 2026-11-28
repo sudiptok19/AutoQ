@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from app.db import models as m
 from app.features.dispatch import segregation
 from tests.test_dispatch import scan, setup
-from tests.test_offline_release_blockers import blockers, close, loaded_online, recover, upload
+from tests.test_offline_release_blockers import _race, _waiting_on_locks, attach, blockers, close, loaded_online, manifest_labels, record_pdf, recover, settle
 from tests.test_offline_scanner import GEN, events, snap, sync
 from tests.test_spc_review import drifting_lot, review  # noqa: F401  (fixture)
 
@@ -76,41 +76,122 @@ def test_close_also_requires_a_current_seal_recheck(client, auth, db):
     assert blockers(close(client, auth, shp["id"])) == ["SEAL_RECHECK_EXPIRED", "SEAL_RECHECK_EXPIRED"]
 
 
-# ── 3. unrelated or synthetic evidence settling a lost-device recovery ─────────────────────────────────────────
-def test_recovery_evidence_must_be_requested_first_physical_recent_and_unused(client, auth, db):
+# ── 3. recovery evidence: bound to one pending recovery, attested, consumed once ───────────────────────────────
+def two_pending_recoveries(client, auth, db):
+    """Two shipments on one order, each with a requested recovery (its own device, snapshot and task)."""
+    _, _, order, _, _, ship = loaded_online(client, auth, db)
+    other = client.post(f"{API}/shipments", headers=auth("disp.kiran"), json={"order_id": order["id"], "vehicle_no": "KA-01-R2", "dock": "Dock B"})
+    assert other.status_code == 201, other.json()
+    out = []
+    for shp, device in ((ship, "dev-a1"), (other.json(), "dev-b2")):
+        sid = snap(client, auth, shp["id"], device=device).json()["snapshot_id"]
+        pending = recover(client, auth, sid).json()
+        assert pending["settlement"] is None and pending["recovery_task_id"]
+        out.append((shp, sid, pending["recovery_task_id"]))
+    return out
+
+
+def _still_pending(db, sid, task_id):
+    db.expire_all()
+    assert db.get(m.OfflineSnapshot, sid).settled_at is None
+    assert db.get(m.SegregationTask, task_id).status == "OPEN"
+
+
+def test_generic_uploads_never_settle_a_recovery(client, auth, db):
+    (shp, sid, task), _ = two_pending_recoveries(client, auth, db)
+    synth = db.scalars(select(m.Evidence.sha256).where(m.Evidence.evidence_source == "SYNTHETIC_TEST")).first()
+    for who in ("qe.ananya", "qm.farhan"):
+        for purpose in ("REVIEW_RECORD", "SUPPLIER_DOCUMENT"):
+            sha = client.post(f"{API}/evidence", headers=auth(who), data={"purpose": purpose},
+                              files={"file": ("x.pdf", record_pdf(f"{who}{purpose}"), "application/pdf")}).json()["sha256"]
+            r = recover(client, auth, sid, evidence=[sha])                      # fresh, physical source, QE/QM, after the request
+            assert r.status_code == 422 and r.json()["error"]["code"] == "EVIDENCE_NOT_LINKED"
+    assert recover(client, auth, sid, evidence=[synth]).status_code == 422
+    _still_pending(db, sid, task)
+    assert set(blockers(close(client, auth, shp["id"]))) == {"SNAPSHOT_UNSETTLED", "PHYSICAL_TASK_OPEN"}
+
+
+def test_record_needs_a_requested_recovery_a_quality_attester_and_a_complete_count(client, auth, db):
     *_, shp = loaded_online(client, auth, db)
     sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
-    old = upload(client, auth)                                                              # stored BEFORE the recovery
-    r = recover(client, auth, sid, evidence=[old])
+    manifest = manifest_labels(db, shp["id"])
+    r = attach(client, auth, sid, counted=manifest)
     assert r.status_code == 409 and r.json()["error"]["code"] == "RECOVERY_NOT_REQUESTED"
-    assert recover(client, auth, sid).json()["recovery_requested_at"]
-    r = recover(client, auth, sid, evidence=[old])
+    task = recover(client, auth, sid).json()["recovery_task_id"]
+    assert attach(client, auth, sid, counted=manifest, who="disp.kiran").status_code == 403
+    r = attach(client, auth, sid, counted=manifest[:1])
+    assert r.status_code == 422 and r.json()["error"]["code"] == "COUNT_MISMATCH" and r.json()["error"]["details"]["missing"] == manifest[1:]
+    r = attach(client, auth, sid, counted=manifest, locations=["TRUCK"])
+    assert r.status_code == 422 and r.json()["error"]["code"] == "RECONCILIATION_SCOPE_INCOMPLETE"
+    assert attach(client, auth, sid, counted=manifest[:1], disposition="DISCREPANCY_SEGREGATED").status_code == 422   # needs what was done
+    earlier = client.post(f"{API}/evidence", headers=auth("qe.ananya"), data={"purpose": "REVIEW_RECORD"},
+                          files={"file": ("x.pdf", data := record_pdf("old"), "application/pdf")})
+    assert earlier.status_code == 201
+    r = attach(client, auth, sid, counted=manifest, data=data)                     # bytes stored before: not made for this recovery
     assert r.status_code == 422 and r.json()["error"]["code"] == "EVIDENCE_NOT_LINKED"
-    # Unrelated SYNTHETIC_TEST evidence (e.g. a seal image) never settles a recovery, whenever it was stored.
-    synth = db.scalars(select(m.Evidence.sha256).where(m.Evidence.evidence_source == "SYNTHETIC_TEST")).first()
-    assert synth
-    db.execute(update(m.Evidence).where(m.Evidence.sha256 == synth).values(created_at=datetime.now(UTC) + timedelta(seconds=1))); db.commit()
-    r = recover(client, auth, sid, evidence=[synth])
-    assert r.status_code == 422 and "SYNTHETIC_TEST" in r.json()["error"]["message"]
-    sn = db.get(m.OfflineSnapshot, sid); db.refresh(sn)
-    assert sn.settled_at is None
-    # A record uploaded for this recovery settles it.
-    db.execute(update(m.Evidence).where(m.Evidence.sha256 == old).values(created_at=datetime.now(UTC) + timedelta(seconds=1))); db.commit()
-    rec = recover(client, auth, sid, evidence=[old]).json()
-    assert rec["settlement"] == "RECOVERED" and rec["recovery_evidence"][0]["for_snapshot"] == sid
-    assert rec["recovery_evidence"][0]["uploaded_by"] == "qe.ananya"
+    _still_pending(db, sid, task)
+    assert db.scalar(select(m.RecoveryRecord.sha256).where(m.RecoveryRecord.snapshot_id == sid)) is None   # refusals roll back whole
 
 
-def test_one_record_cannot_settle_two_recoveries(client, auth, db):
+def test_bound_record_settles_its_own_recovery_once(client, auth, db):
+    (shp, sid, task), (other, other_sid, other_task) = two_pending_recoveries(client, auth, db)
+    assert close(client, auth, shp["id"]).status_code == 409
+    data = record_pdf("A")
+    r = attach(client, auth, sid, counted=manifest_labels(db, shp["id"]), data=data)
+    assert r.status_code == 200, r.json()
+    rec = r.json()["recovery_evidence"][0]
+    assert r.json()["settlement"] == "RECOVERED" and rec["for_snapshot"] == sid and rec["recovery_task_id"] == task
+    assert rec["shipment_id"] == shp["id"] and rec["uploaded_by"] == "qe.ananya" and rec["counted_scope"]["locations"] == ["STAGING_LANE", "TRUCK"]
+    row = db.get(m.RecoveryRecord, rec["sha256"])
+    assert (row.snapshot_id, row.task_id, row.shipment_id, row.disposition) == (sid, task, shp["id"], "MATCHES_MANIFEST")
+    db.expire_all()
+    assert db.get(m.SegregationTask, task).status == "COMPLETED"
+    # the same record cannot settle the other shipment's recovery, by either route
+    r = attach(client, auth, other_sid, counted=[], data=data)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "EVIDENCE_NOT_LINKED"
+    r = recover(client, auth, other_sid, evidence=[rec["sha256"]])
+    assert r.status_code == 422 and sid in r.json()["error"]["message"]
+    _still_pending(db, other_sid, other_task)
+    assert close(client, auth, shp["id"]).status_code == 200
+    # a discrepancy is settled only with what was done, and is recorded as such
+    r = attach(client, auth, other_sid, counted=["PKG-STRAY"], disposition="DISCREPANCY_SEGREGATED", note="Stray crate pulled to cage Q2", who="qm.farhan")
+    assert r.status_code == 200 and r.json()["recovery_evidence"][0]["counted_scope"]["packages"] == ["PKG-STRAY"]
+
+
+def test_one_record_has_one_consumer_under_concurrency(client, auth, db, monkeypatch):
+    import concurrent.futures as cf
+    from threading import Barrier
+    from app.features.offline_scanner import service
+    (shp, sid, task), (other, other_sid, other_task) = two_pending_recoveries(client, auth, db)
+    gate, original = Barrier(2, timeout=10), service.sniff
+
+    def both_checked(data):           # both requests have passed every read-side check before either writes
+        gate.wait()
+        return original(data)
+
+    monkeypatch.setattr(service, "sniff", both_checked)
+    data = record_pdf("shared")
+    auth("qe.ananya")
+    with cf.ThreadPoolExecutor(2) as ex:
+        futs = [ex.submit(attach, client, auth, s_, counted=c, data=data, disposition=d, note=n)
+                for s_, c, d, n in ((sid, manifest_labels(db, shp["id"]), "MATCHES_MANIFEST", ""),
+                                    (other_sid, ["X"], "DISCREPANCY_SEGREGATED", "Recount of the second truck"))]
+        codes = sorted(f.result(timeout=30).status_code for f in futs)
+    assert codes == [200, 422]
+    db.expire_all()
+    settled = [x for x in (sid, other_sid) if db.get(m.OfflineSnapshot, x).settlement == "RECOVERED"]
+    assert len(settled) == 1 and db.scalar(select(m.RecoveryRecord.snapshot_id)) == settled[0]
+
+
+def test_task_completion_still_settles_with_an_attributable_disposition(client, auth, db):
     *_, shp = loaded_online(client, auth, db)
-    s1 = snap(client, auth, shp["id"], device="dev-a1").json()["snapshot_id"]
-    s2 = snap(client, auth, shp["id"], device="dev-b2").json()["snapshot_id"]
-    recover(client, auth, s1); recover(client, auth, s2)
-    sha = upload(client, auth)
-    db.execute(update(m.Evidence).where(m.Evidence.sha256 == sha).values(created_at=datetime.now(UTC) + timedelta(seconds=1))); db.commit()
-    assert recover(client, auth, s1, evidence=[sha]).json()["settlement"] == "RECOVERED"
-    r = recover(client, auth, s2, evidence=[sha])
-    assert r.status_code == 422 and "already settled" in r.json()["error"]["message"]
+    sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    task = recover(client, auth, sid).json()["recovery_task_id"]
+    r = client.post(f"{API}/segregation-tasks/{task}/complete", json={"reason": "Counted truck and staging: matches the manifest"}, headers=auth("qe.ananya"))
+    assert r.status_code == 200
+    db.expire_all()
+    sn = db.get(m.OfflineSnapshot, sid)
+    assert sn.settlement == "RECOVERED" and db.get(m.User, sn.settled_by).username == "qe.ananya"
 
 
 # ── 4. a refresh superseding a pending recovery ────────────────────────────────────────────────────────────────
@@ -203,3 +284,145 @@ def test_a_v1_provisional_event_first_received_after_the_writer_switch_cannot_lo
     assert db.scalar(select(m.Load.id)) is None
     again = sync(client, auth, "dev-a1", sid, [queued]).json()["results"][0]                 # exact historical replay
     assert again["outcome"] == "DUPLICATE" and again["original_outcome"] == "CONFLICT"
+
+
+# ── R2 review: concurrent scan provenance (both commit orders) ────────────────────────────────────────────────
+def test_an_online_scan_that_wins_the_event_id_is_not_adopted_by_offline_reconciliation(client, auth, db, monkeypatch):
+    from threading import Event
+    from app.features.offline_scanner import service
+    from tests.test_chain_v2 import ev
+    _, _, _, pkg, _, ship = setup(client, auth, db)
+    sid = snap(client, auth, ship["id"]).json()["snapshot_id"]
+    assert settle(client, auth, sid).status_code == 200                                # offline authority surrendered
+    capture = ev("dev-a1", 1, GEN, pkg["token"], ship["id"], "PROVISIONAL_ACCEPT", version=2, snapshot_id=sid)
+    reached, release, original = Event(), Event(), service._snapshot_reasons
+
+    def pause(*args):                 # after the sync's provenance pre-read, before its gate replay
+        reached.set()
+        assert release.wait(15)
+        return original(*args)
+
+    monkeypatch.setattr(service, "_snapshot_reasons", pause)
+    auth("disp.kiran")
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(1) as ex:
+        pending = ex.submit(sync, client, auth, "dev-a1", None, [capture])
+        try:
+            assert reached.wait(10)
+            online = scan(client, auth, ship["id"], pkg["token"], capture["client_event_id"])
+            assert online.json()["decision"] == "ACCEPTED"
+        finally:
+            release.set()
+        r = pending.result(timeout=20).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and r["segregation_task_id"], r
+    db.expire_all()
+    assert db.get(m.DeviceEvent, ("dev-a1", 1)).scan_id is None
+    loads = db.scalars(select(m.Load).where(m.Load.shipment_id == ship["id"], m.Load.removed_at.is_(None))).all()
+    assert [x.accepted_scan_id for x in loads] == [online.json()["scan_id"]]
+
+
+def test_an_online_request_cannot_inherit_the_offline_scan_that_won_first(client, auth, db, monkeypatch):
+    from threading import Event
+    from app.features.dispatch import service
+    from tests.test_chain_v2 import ev
+    _, _, _, pkg, _, ship = setup(client, auth, db)
+    sid = snap(client, auth, ship["id"]).json()["snapshot_id"]
+    capture = ev("dev-a1", 1, GEN, pkg["token"], ship["id"], "PROVISIONAL_ACCEPT", version=2, snapshot_id=sid)
+    reached, release, original = Event(), Event(), service.evaluate
+
+    def pause_first(*args):
+        if not reached.is_set():
+            reached.set()
+            assert release.wait(15)
+        return original(*args)
+
+    monkeypatch.setattr(service, "evaluate", pause_first)
+    auth("disp.kiran")
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(1) as ex:
+        pending = ex.submit(scan, client, auth, ship["id"], pkg["token"], capture["client_event_id"])
+        try:
+            assert reached.wait(10)
+            assert sync(client, auth, "dev-a1", None, [capture]).json()["results"][0]["outcome"] == "ACCEPTED"
+        finally:
+            release.set()
+        competing = pending.result(timeout=20)
+    assert competing.status_code == 409 and competing.json()["error"]["code"] == "EVENT_PROVENANCE_MISMATCH"
+    # the device's own online retry still replays
+    assert scan(client, auth, ship["id"], pkg["token"], "own-online").json()["decision"] in ("ACCEPTED", "BLOCKED")
+    again = scan(client, auth, ship["id"], pkg["token"], "own-online")
+    assert again.status_code == 200 and again.json()["replay"] is True
+
+
+# ── R2 review: a late conflict after departure gets an instruction for where the truck is ─────────────────────
+def test_late_conflict_after_departure_gets_a_carrier_instruction_that_replays(client, auth, db, monkeypatch):
+    from app.features.offline_scanner import service
+    captures, apply_event = [], service._apply
+
+    def record(principal, device_id, event):
+        captures.append((device_id, dict(event)))
+        return apply_event(principal, device_id, event)
+
+    monkeypatch.setattr(service, "_apply", record)
+    out, ship = _race(client, auth, db, first="depart")
+    assert ship.status == "IN_TRANSIT"
+    conflict = out["sync"].json()["results"][0]
+    task = db.get(m.SegregationTask, conflict["segregation_task_id"])
+    assert task.type == "IN_TRANSIT_RECALL" and task.shipment_id == ship.id
+    assert "unload" not in task.reason.lower() and "carrier" in task.reason and task.consignee_action["vehicle_no"] == ship.vehicle_no
+    device_id, event = captures[0]
+    replay = sync(client, auth, device_id, None, [event]).json()["results"][0]
+    assert replay["segregation_task_id"] == task.id and replay["note"] == conflict["note"]
+    assert db.scalar(select(m.SegregationTask.id).where(m.SegregationTask.dedupe_key == f"offline:{event['client_event_id']}",
+                                                        m.SegregationTask.id != task.id)) is None
+
+
+# ── R2 review: historical replay compatibility and lost responses ──────────────────────────────────────────────
+def test_replay_preserves_a_pre_r2_v1_effective_batch_claim(client, auth, db):
+    from tests.test_chain_v2 import ev
+    _, _, _, pkg, _, ship = setup(client, auth, db)
+    sid = snap(client, auth, ship["id"]).json()["snapshot_id"]
+    wire = ev("dev-a1", 1, GEN, pkg["token"], ship["id"], "ONLINE")
+    wire["snapshot_id"] = None                                              # the phone sent an explicit null …
+    first = sync(client, auth, "dev-a1", sid, [{**wire, "snapshot_id": sid}])   # … which pre-R2 stored as the batch claim
+    assert first.status_code == 200 and db.get(m.DeviceEvent, ("dev-a1", 1)).claimed_snapshot_id == sid
+    r = sync(client, auth, "dev-a1", sid, [wire])
+    assert r.status_code == 200 and r.json()["results"][0]["outcome"] == "DUPLICATE"
+    assert r.json()["results"][0]["original_outcome"] == first.json()["results"][0]["outcome"]
+    # without that batch value, or under another batch, the stored claim is not matched
+    assert sync(client, auth, "dev-a1", None, [wire]).status_code == 409
+
+
+def test_a_new_v1_explicit_null_never_borrows_the_batch_snapshot(client, auth, db):
+    from tests.test_chain_v2 import ev
+    _, _, _, pkg, _, ship = setup(client, auth, db)
+    sid = snap(client, auth, ship["id"]).json()["snapshot_id"]
+    e = ev("dev-a1", 1, GEN, pkg["token"], ship["id"], "PROVISIONAL_ACCEPT")
+    e["snapshot_id"] = None
+    r = sync(client, auth, "dev-a1", sid, [e]).json()["results"][0]
+    assert r["outcome"] == "CONFLICT" and "SNAPSHOT_REQUIRED" in r["note"]
+    assert db.get(m.DeviceEvent, ("dev-a1", 1)).claimed_snapshot_id is None
+
+
+def test_losing_both_online_and_first_sync_replies_keeps_the_online_decision(client, auth, db):
+    from tests.test_chain_v2 import ev
+    _, _, _, pkg, _, ship = setup(client, auth, db)
+    assert snap(client, auth, ship["id"]).status_code == 200
+    capture = ev("dev-a1", 1, GEN, pkg["token"], ship["id"], "ONLINE", version=2)
+    online = client.post(f"{API}/shipments/{ship['id']}/scans", headers=auth("disp.kiran"),
+                         json={"token": pkg["token"], "client_event_id": capture["client_event_id"], "device_id": "dev-a1"}).json()
+    assert online["decision"] == "ACCEPTED"
+    for _ in range(3):
+        r = sync(client, auth, "dev-a1", None, [capture]).json()["results"][0]
+        assert r["outcome"] == "DUPLICATE" and r["original_outcome"] == "ACCEPTED" and r["scan"]["scan_id"] == online["scan_id"], r
+
+
+def test_sync_rejects_coerced_json_types(client, auth, db):
+    from tests.test_chain_v2 import ev
+    _, _, _, pkg, _, ship = setup(client, auth, db)
+    snap(client, auth, ship["id"])
+    good = ev("dev-a1", 1, GEN, pkg["token"], ship["id"], "ONLINE", version=2)
+    for field, bad in (("seq", "1"), ("chain_version", "2"), ("chain_version", True), ("seq", 1.0), ("token", 5)):
+        r = sync(client, auth, "dev-a1", None, [{**good, field: bad}])
+        assert r.status_code == 422, (field, bad, r.status_code)
+    assert db.get(m.DeviceEvent, ("dev-a1", 1)) is None
