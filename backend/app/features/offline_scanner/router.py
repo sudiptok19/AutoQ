@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Depends, Query
+import json
+
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.auth import Principal, require_roles
@@ -15,6 +18,9 @@ DEVICE = r"^[A-Za-z0-9._\-]{3,40}$"
 
 
 class EventIn(BaseModel):
+    # Strict: hashed fields are validated as sent, never coerced ("1" is not 1, true is not 1). A coerced value would
+    # hash differently from what the phone signed into its chain.
+    model_config = ConfigDict(strict=True)
     client_event_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9:._\-]+$")
     seq: int = Field(ge=1)
     prev_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -29,6 +35,13 @@ class EventIn(BaseModel):
     # hash (snapshot_id: exact capture snapshot for offline decisions, explicit null for ONLINE). Readers accept both.
     chain_version: Literal[1, 2] = 1
 
+    @field_validator("chain_version", mode="before")
+    @classmethod
+    def _exact_int(cls, v):
+        if type(v) is not int:                 # Literal[1, 2] alone admits true (== 1)
+            raise ValueError("chain_version must be the integer 1 or 2")
+        return v
+
     @field_validator("scanned_at")
     @classmethod
     def _aware(cls, v: str) -> str:
@@ -40,6 +53,7 @@ class EventIn(BaseModel):
 
 
 class SyncIn(BaseModel):
+    model_config = ConfigDict(strict=True)
     device_id: str = Field(pattern=DEVICE)
     snapshot_id: str | None = None
     events: list[EventIn] = Field(max_length=500)
@@ -56,7 +70,16 @@ def snapshot(shipment_id: str, device_id: str = Query(pattern=DEVICE), local_seq
 
 @router.post("/sync/scans")
 def sync(body: SyncIn, db: Session = Depends(get_db), p: Principal = Dispatcher) -> dict:
-    return s.sync(db, p, body.device_id, body.snapshot_id, [e.model_dump() for e in body.events])
+    return s.sync(db, p, body.device_id, body.snapshot_id, [_event_dict(e) for e in body.events])
+
+
+def _event_dict(e: EventIn) -> dict:
+    """Keep the difference between an absent snapshot_id and an explicit null: under chain v2 the field is hashed, and
+    'absent' is a schema error, not 'no snapshot'."""
+    d = e.model_dump()
+    if "snapshot_id" not in e.model_fields_set:
+        del d["snapshot_id"]
+    return d
 
 
 HEX64 = r"^[0-9a-f]{64}$"
@@ -71,8 +94,8 @@ class SettleIn(BaseModel):
 
 class RecoverIn(BaseModel):
     reason: str = Field(min_length=10, max_length=2000)
-    # Uploaded physical reconciliation records (POST /evidence). Without them, recovery raises a reconciliation task
-    # and the shipment stays blocked until that task is completed.
+    # Kept for older clients. A generic upload never settles a recovery: attach the record to the pending recovery
+    # (POST /offline/snapshots/{id}/recovery-record), or complete its reconciliation task.
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -86,3 +109,22 @@ def settle(snapshot_id: str, body: SettleIn, db: Session = Depends(get_db), p: P
 def recover(snapshot_id: str, body: RecoverIn, db: Session = Depends(get_db), p: Principal = Depends(require_roles("quality_manager"))) -> dict:
     """Lost or unavailable device: settle its authorization explicitly, with an audited reason (Quality Manager)."""
     return s.recover(db, p, snapshot_id, body.reason, body.evidence_ids)
+
+
+@router.post("/offline/snapshots/{snapshot_id}/recovery-record")
+async def recovery_record(snapshot_id: str, file: UploadFile = File(), disposition: str = Form(), counted_packages: str = Form("[]"),
+                          locations: str = Form('["TRUCK", "STAGING_LANE"]'), note: str = Form("", max_length=2000), db: Session = Depends(get_db),
+                          p: Principal = Depends(require_roles("quality_engineer", "quality_manager"))) -> dict:
+    """Settle a requested recovery with the physical recount made for it: the file is bound to this recovery's task,
+    snapshot and shipment, with who attested it and what they counted, and consumed in the same transaction."""
+    def strings(raw: str, field: str) -> list[str]:
+        try:
+            v = json.loads(raw)
+        except ValueError:
+            v = None
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v) or len(v) > 500:
+            raise ApiError(422, "VALIDATION", f"{field} must be a JSON array of strings", {"field": field})
+        return v
+    data = await file.read()
+    return await run_in_threadpool(s.attach_recovery_record, db, p, snapshot_id, data, file.filename or "record", disposition=disposition,
+                                   counted_packages=strings(counted_packages, "counted_packages"), locations=strings(locations, "locations"), note=note)

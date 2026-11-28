@@ -177,7 +177,7 @@ export function Modal({ open, onClose, title, children, width = 520 }: { open: b
   }, [open, onClose])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 backdrop-blur-[2px] sm:items-center sm:p-6" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-0 backdrop-blur-[2px] sm:items-center sm:p-6" onMouseDown={onClose}>
       <div className="rise max-h-[92vh] w-full overflow-auto rounded-t-2xl border border-line bg-surface shadow-2xl sm:rounded-2xl" style={{ maxWidth: width }} onMouseDown={e => e.stopPropagation()}>
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface px-5 py-3.5">
           <div className="font-semibold">{title}</div>

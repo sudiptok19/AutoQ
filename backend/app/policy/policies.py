@@ -83,6 +83,13 @@ def publish(db: Session, settings: PolicySettings, actor_id: str | None, *, vers
     """Activate a new immutable version; older versions stay for provenance. Takes the policy advisory lock exclusively:
     offline replay holds it shared while judging an event, so a floor change never lands mid-decision."""
     db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": POLICY_LOCK})
+    cur = db.scalars(select(m.Policy).where(m.Policy.active.is_(True))).first()
+    if cur is not None:
+        floor = settings_of(cur).offline.chain_min_version
+        if settings.offline.chain_min_version < floor:
+            # After cutover, a lower floor would re-admit outdated writers: their captures would regain load authority.
+            raise ApiError(409, "POLICY_FLOOR_DOWNGRADE", f"The device-chain floor is v{floor}; it cannot be lowered to v{settings.offline.chain_min_version}",
+                           {"active_floor": floor, "requested_floor": settings.offline.chain_min_version})
     n = len(db.scalars(select(m.Policy.id)).all()) + 1
     ver = version or f"p{n}"
     if db.scalars(select(m.Policy).where(m.Policy.version == ver)).first():

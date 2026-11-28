@@ -135,13 +135,36 @@ def upload(client, auth, who="qe.ananya"):
     return r.json()["sha256"]
 
 
+def record_pdf(tag: str = "") -> bytes:
+    """A distinct small PDF per call (records are content-addressed; a reused file is refused)."""
+    import uuid
+    return f"%PDF-1.4\n% recount {tag} {uuid.uuid4()}\n%%EOF\n".encode()
+
+
+def manifest_labels(db, shp_id):
+    return sorted(db.scalars(select(m.Package.label).join(m.Load, m.Load.package_id == m.Package.id)
+                             .where(m.Load.shipment_id == shp_id, m.Load.removed_at.is_(None))))
+
+
+def attach(client, auth, sid, *, counted, who="qe.ananya", disposition="MATCHES_MANIFEST", locations=("TRUCK", "STAGING_LANE"), note="",
+           data=None):
+    import json
+    return client.post(f"{API}/offline/snapshots/{sid}/recovery-record", headers=auth(who),
+                       files={"file": ("recount.pdf", data or record_pdf(sid), "application/pdf")},
+                       data={"disposition": disposition, "counted_packages": json.dumps(list(counted)), "locations": json.dumps(list(locations)),
+                             "note": note})
+
+
 def test_recovery_with_linked_reconciliation_evidence_settles_at_once(client, auth, db):
     *_, shp = loaded_online(client, auth, db)
     sid = snap(client, auth, shp["id"]).json()["snapshot_id"]
+    assert recover(client, auth, sid).json()["recovery_requested_at"]                 # request first; the record is made for it
     assert recover(client, auth, sid, evidence=["0" * 64]).status_code == 422          # evidence must exist
-    sha = upload(client, auth)
-    rec = recover(client, auth, sid, evidence=[sha]).json()
-    assert rec["settlement"] == "RECOVERED" and rec["recovery_evidence"][0]["sha256"] == sha
+    r = attach(client, auth, sid, counted=manifest_labels(db, shp["id"]))
+    assert r.status_code == 200, r.json()
+    rec = r.json()
+    sha = rec["recovery_evidence"][0]["sha256"]
+    assert rec["settlement"] == "RECOVERED" and db.get(m.RecoveryRecord, sha).snapshot_id == sid
     assert db.get(m.SegregationTask, rec["recovery_task_id"]).status == "COMPLETED"
     assert close(client, auth, shp["id"]).json()["status"] == "CLOSED"
 

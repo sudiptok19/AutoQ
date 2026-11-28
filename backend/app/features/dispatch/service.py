@@ -252,6 +252,18 @@ def evaluate(db: Session, locks: LockSet, s0: m.Shipment, token: str, now: datet
     return g, pkg, units, s
 
 
+def _replay(db: Session, p: Principal, prior: m.Scan, content: str, device_id: str | None, offline: bool) -> dict:
+    """A scan already owns this client_event_id. Only the SAME request may replay it: same shipment+token, same actor,
+    same device and same origin (online request vs offline sync). Anything else is a different capture that must not
+    inherit the recorded decision, whichever transaction won the insert."""
+    if prior.content_sha256 != content:
+        raise ApiError(409, "EVENT_ID_REUSED", "client_event_id already used for a different scan", {"recorded_scan": prior.id})
+    if prior.actor_id != p.id or prior.device_id != device_id or bool(prior.offline) != offline:
+        raise ApiError(409, "EVENT_PROVENANCE_MISMATCH", "client_event_id belongs to a scan recorded by another request; it is not replayed",
+                       {"recorded_scan": prior.id, "recorded_origin": "OFFLINE_SYNC" if prior.offline else "ONLINE"})
+    return scan_view(db, prior, replay=True)
+
+
 def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_id: str, device_id: str | None, *, offline: bool = False,
          captured_at: datetime | None = None, commit_load: bool = True,
          authorize: Callable[[m.Package | None], list[dict]] | None = None) -> tuple[dict, bool]:
@@ -262,9 +274,7 @@ def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_
     content = content_sha(s0.id, token)
     prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == client_event_id)).first()
     if prior:
-        if prior.content_sha256 != content:
-            raise ApiError(409, "EVENT_ID_REUSED", "client_event_id already used for a different scan")
-        return scan_view(db, prior, replay=True), False
+        return _replay(db, p, prior, content, device_id, offline), False
     now = datetime.now(UTC)
     locks = lock_set(db)
     g, pkg, units, s = evaluate(db, locks, s0, token, now)
@@ -281,9 +291,7 @@ def scan(db: Session, p: Principal, shipment_key: str, token: str, client_event_
             db.flush()
     except IntegrityError:  # a concurrent request with the same client_event_id won the insert
         prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == client_event_id)).one()
-        if prior.content_sha256 != content:
-            raise ApiError(409, "EVENT_ID_REUSED", "client_event_id already used for a different scan")
-        return scan_view(db, prior, replay=True), False
+        return _replay(db, p, prior, content, device_id, offline), False
     if accepted:
         db.add(m.Load(id=new_id("load"), package_id=pkg.id, shipment_id=s.id, accepted_scan_id=sc.id, unit_count=len(units)))
         pkg.state = "LOADED"
@@ -333,20 +341,42 @@ def _revalidate(db: Session, pkgs: list[m.Package], s: m.Shipment) -> list[dict]
     return problems
 
 
+def _manifest_blockers(db: Session, s: m.Shipment, pkgs: list[m.Package]) -> list[dict]:
+    """The manifest must still describe a real load: something on the truck, and the agreed quantity.
+    Checked at close AND at departure, because crates can come off a closed shipment (removal tasks)."""
+    out = []
+    loaded, exp = loaded_units(db, s.id), expected_units(db, s)
+    if not pkgs or loaded == 0:
+        out.append({"code": "EMPTY_MANIFEST", "message": "Nothing loaded"})
+    elif loaded != exp and not policies.settings_of(policies.active(db)).allow_partial_close:
+        out.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
+    return out
+
+
+def _seal_age_blockers(db: Session, pkgs: list[m.Package]) -> list[dict]:
+    """An INTACT recheck is evidence for a limited time only. A crate whose last recheck has aged out is not unloaded:
+    it is rechecked on the truck. (A recheck that is not INTACT is handled by _revalidate, which requires removal.)"""
+    max_age = policies.settings_of(policies.active(db)).seal_recheck_max_age_minutes
+    now, out = datetime.now(UTC), []
+    for pkg in pkgs:
+        chk = last_check(db, pkg)
+        if chk and chk.kind == "RECHECK" and chk.result == "INTACT" and now - chk.created_at > timedelta(minutes=max_age):
+            out.append({"code": "SEAL_RECHECK_EXPIRED", "package_id": pkg.id,
+                        "message": f"{pkg.label}: last INTACT recheck is older than {max_age} min — recheck the seal on the truck"})
+    return out
+
+
 def close(db: Session, p: Principal, shipment_key: str, unsynced: int = 0) -> dict:
     s0 = find_shipment(db, shipment_key)
     locks, pkgs, s = _lock_shipment_contents(db, s0)
     if s.status != "OPEN":
         raise ApiError(409, "MANIFEST_CLOSED", f"Shipment is {s.status}")
-    blockers = []
-    loaded, exp = loaded_units(db, s.id), expected_units(db, s)
-    if not pkgs:
-        blockers.append({"code": "EMPTY_MANIFEST", "message": "Nothing loaded"})
-    elif loaded != exp and not policies.settings_of(policies.active(db)).allow_partial_close:
-        blockers.append({"code": "QTY_MISMATCH", "message": f"{loaded} loaded ≠ {exp} expected"})
+    blockers = _manifest_blockers(db, s, pkgs)
+    loaded = loaded_units(db, s.id)
     if unsynced:
         blockers.append({"code": "PROVISIONAL_PENDING", "message": f"{unsynced} offline scan(s) on this device are not synced yet"})
     blockers += _reconciliation_blockers(db, s)
+    blockers += _seal_age_blockers(db, pkgs)
     for prob in _revalidate(db, pkgs, s):
         blockers.append({"code": "LOADED_PACKAGE_BLOCKED", "message": f"{prob['label']}: {', '.join(b['code'] for b in prob['blockers'])} — unload required", "package_id": prob["package_id"]})
     if blockers:
@@ -377,7 +407,7 @@ def movement(db: Session, p: Principal, shipment_key: str, type: str, location: 
         if s.status != "CLOSED":
             raise ApiError(409, "MANIFEST_OPEN" if s.status == "OPEN" else "ALREADY_DEPARTED", f"Shipment is {s.status}; close the manifest first")
         t = _occurred(occurred_at, s.closed_at)
-        open_items_ = _reconciliation_blockers(db, s)
+        open_items_ = _manifest_blockers(db, s, pkgs) + _reconciliation_blockers(db, s) + _seal_age_blockers(db, pkgs)
         if open_items_:   # e.g. a late offline sync refused a crate after close: it must be dealt with before the truck leaves
             raise ApiError(409, "DEPARTURE_NOT_RECONCILED", "Shipment cannot depart", {"blockers": open_items_})
         problems = _revalidate(db, pkgs, s)

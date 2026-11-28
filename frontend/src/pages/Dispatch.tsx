@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Camera, CheckCircle2, ClipboardPaste, Lock, QrCode, Repeat, ShieldX, Truck, XOctagon, Flag, MapPin } from 'lucide-react'
 import { useAct, useGet } from '../api/hooks'
 import { api } from '../api/client'
@@ -52,15 +53,37 @@ function Reconciliation({ ship }: { ship: ShipView }) {
   const [doing, setDoing] = useState<SegregationTask | null>(null)
   const [reason, setReason] = useState('')
   const [record, setRecord] = useState<File | null>(null)
+  // What the quality engineer physically counted. The server compares it with the manifest under the shipment lock.
+  const manifest = [...new Set((ship.scans ?? []).filter(x => x.decision === 'ACCEPTED' && x.package_label).map(x => x.package_label as string))].sort()
+  const [counted, setCounted] = useState<string[]>([])
+  const [disposition, setDisposition] = useState<'MATCHES_MANIFEST' | 'DISCREPANCY_SEGREGATED'>('MATCHES_MANIFEST')
+  const [places, setPlaces] = useState({ TRUCK: false, STAGING_LANE: false })
+  const [note, setNote] = useState('')
+  const [requested, setRequested] = useState(false)   // the request committed even if a later step failed: a retry only attaches
+  const qc = useQueryClient()
   const recover = useAct(async () => {
-    // Optional uploaded recount/inspection record: with it the authorization settles now; without it a reconciliation task is raised.
-    const evidence_ids: string[] = []
-    if (record) { const f = new FormData(); f.set('file', record, record.name); f.set('purpose', 'REVIEW_RECORD'); evidence_ids.push((await api.post<{ sha256: string }>('/evidence', f)).sha256) }
-    return api.post(`/offline/snapshots/${recovering!.snapshot_id}/recover`, { reason, evidence_ids })
+    // Step 1 ends the phone's authority and raises the reconciliation task. Step 2 attaches the recount made for that
+    // task: the server binds it to this task, snapshot and shipment and settles in one transaction.
+    const id = recovering!.snapshot_id
+    let out: unknown = null
+    if (!recovering!.recovery_requested_at && !requested) {
+      try { out = await api.post(`/offline/snapshots/${id}/recover`, { reason, evidence_ids: [] }) }
+      catch (e: any) { if (e?.code !== 'RECOVERY_IN_PROGRESS') throw e }
+      setRequested(true)
+    }
+    if (record) {
+      const f = new FormData()
+      f.set('file', record, record.name); f.set('disposition', disposition); f.set('counted_packages', JSON.stringify(counted))
+      f.set('locations', JSON.stringify(Object.entries(places).filter(([, v]) => v).map(([k]) => k))); f.set('note', note)
+      try { out = await api.post(`/offline/snapshots/${id}/recovery-record`, f) }
+      catch (e) { qc.invalidateQueries(); throw e }     // show the recovery as requested; the record can be retried
+    }
+    return out
   })
   const done = useAct(() => api.post(`/segregation-tasks/${doing!.id}/complete`, { reason }))
   if (!auths.length && !tasks.length) return null
-  const reset = () => { setRecovering(null); setDoing(null); setReason(''); setRecord(null); recover.reset(); done.reset() }
+  const pendingReq = !!recovering?.recovery_requested_at || requested
+  const reset = () => { setRecovering(null); setDoing(null); setReason(''); setRecord(null); setCounted([]); setDisposition('MATCHES_MANIFEST'); setPlaces({ TRUCK: false, STAGING_LANE: false }); setNote(''); setRequested(false); recover.reset(); done.reset() }
   return (
     <Card className="mb-6 border-hold/40">
       <CardHeader eyebrow="Before the truck leaves" title="Open offline authorizations and physical tasks" />
@@ -70,9 +93,10 @@ function Reconciliation({ ship }: { ship: ShipView }) {
             <Pill tone="prov">OFFLINE</Pill><Mono>{a.device_id}</Mono><span className="text-muted">{a.operator} · issued {ago(a.issued_at)}</span>
             {a.expired && <Pill tone="hold">expired · captures may still be on the phone</Pill>}
             {a.recovery_requested_at
-              ? <span className="ml-auto text-[11.5px] text-hold">Recovery requested · waiting for the physical reconciliation below</span>
+              ? <><span className="ml-auto text-[11.5px] text-hold">Recovery requested · waiting for the physical reconciliation below</span>
+                  <Button size="sm" disabled={!can('quality_engineer', 'quality_manager')} onClick={() => { reset(); setRecovering(a); setCounted(manifest) }}>Attach recount record…</Button></>
               : <><span className="ml-auto text-[11.5px] text-muted">End the offline session on the phone, or</span>
-                  <Button size="sm" disabled={!can('quality_manager')} onClick={() => { reset(); setRecovering(a) }}>Recover lost device…</Button></>}
+                  <Button size="sm" disabled={!can('quality_manager')} onClick={() => { reset(); setRecovering(a); setCounted(manifest) }}>Recover lost device…</Button></>}
           </li>
         ))}
         {tasks.map(t => (
@@ -86,12 +110,43 @@ function Reconciliation({ ship }: { ship: ShipView }) {
       <Modal open={!!recovering} onClose={reset} title={`Recover ${recovering?.device_id}`}>
         <div className="space-y-3">
           <div className="rounded-lg bg-hold/10 px-3 py-2 text-[12px] text-ink-2">Use only when the phone is lost or unavailable. Its offline authority ends now, and nothing it captured is assumed synced. The truck stays blocked until the physical reconciliation is recorded: attach the recount record here, or a reconciliation task is raised for a quality engineer.</div>
-          <Field label="Reason (audit, required)"><Textarea value={reason} onChange={e => setReason(e.target.value)} className="min-h-14" placeholder="e.g. Phone dropped and broken at Dock 3" /></Field>
-          <Field label="Reconciliation record (optional · PDF, JPEG or PNG)" hint="Stored as UPLOAD evidence and linked to the recovery.">
+          {pendingReq
+            ? <div className="rounded-lg border border-line px-3 py-2 text-[12px] text-ink-2">Recovery requested{recovering?.recovery_task_id ? <> · task <Mono>{recovering.recovery_task_id}</Mono></> : null}. Attach the recount made for it.</div>
+            : <Field label="Reason (audit, required)"><Textarea value={reason} onChange={e => setReason(e.target.value)} className="min-h-14" placeholder="e.g. Phone dropped and broken at Dock 3" /></Field>}
+          <Field label={pendingReq ? 'Recount record (PDF, JPEG or PNG)' : 'Recount record (optional · PDF, JPEG or PNG)'}
+                 hint="The recount made for this recovery, attested by you (quality engineer or manager). Files stored before are refused.">
             <input type="file" accept="application/pdf,image/jpeg,image/png" onChange={e => setRecord(e.target.files?.[0] ?? null)} className="block w-full text-[12px]" />
           </Field>
+          {record && <>
+            <Field label="Where you counted">
+              <div className="flex gap-4 text-[12.5px]">
+                {(['TRUCK', 'STAGING_LANE'] as const).map(k => (
+                  <label key={k} className="flex min-h-11 items-center gap-2"><input type="checkbox" className="size-4" checked={places[k]} onChange={e => setPlaces({ ...places, [k]: e.target.checked })} />{k === 'TRUCK' ? 'Truck' : 'Staging lane'}</label>))}
+              </div>
+            </Field>
+            <Field label={`Crates found (manifest: ${manifest.length})`}>
+              <div className="flex flex-wrap gap-x-4 text-[12.5px]">
+                {manifest.length ? manifest.map(l => (
+                  <label key={l} className="flex min-h-11 items-center gap-2"><input type="checkbox" className="size-4" checked={counted.includes(l)} onChange={e => setCounted(e.target.checked ? [...counted, l] : counted.filter(x => x !== l))} /><Mono>{l}</Mono></label>))
+                  : <span className="text-muted">No crates on the manifest</span>}
+              </div>
+            </Field>
+            <Field label="Disposition">
+              <Select value={disposition} onChange={e => setDisposition(e.target.value as typeof disposition)}>
+                <option value="MATCHES_MANIFEST">Count matches the manifest</option>
+                <option value="DISCREPANCY_SEGREGATED">Discrepancy found and segregated</option>
+              </Select>
+            </Field>
+            <Field label={disposition === 'DISCREPANCY_SEGREGATED' ? 'What differed and what you did (required)' : 'Note (optional)'}>
+              <Textarea value={note} onChange={e => setNote(e.target.value)} className="min-h-12" placeholder="e.g. PKG-0007 found in staging, tagged red in cage Q2" />
+            </Field>
+          </>}
           {recover.error && <ErrorBox error={recover.error} />}
-          <Button variant="danger" className="w-full" disabled={reason.trim().length < 10} loading={recover.isPending} onClick={() => recover.mutate(undefined, { onSuccess: reset })}>{record ? 'Recover with reconciliation record' : 'Recover and raise reconciliation task'}</Button>
+          <Button variant="danger" className="w-full" loading={recover.isPending} onClick={() => recover.mutate(undefined, { onSuccess: reset })}
+                  disabled={(!pendingReq && reason.trim().length < 10) || (pendingReq && !record) ||
+                            (!!record && (!places.TRUCK || !places.STAGING_LANE || (disposition === 'DISCREPANCY_SEGREGATED' && note.trim().length < 10)))}>
+            {pendingReq ? 'Attach record and settle' : record ? 'Recover and attach recount' : 'Recover and raise reconciliation task'}
+          </Button>
         </div>
       </Modal>
       <Modal open={!!doing} onClose={reset} title={`Disposition · ${doing?.package_label ?? 'crate'}`}>

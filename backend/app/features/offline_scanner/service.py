@@ -32,15 +32,18 @@ Replay (sync)
 The chain detects edits, gaps and reordering after capture. It does not authenticate the phone or prove that nothing
 was deleted before the first sync.
 """
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.core import audit, outbox
 from app.core.auth import Principal
 from app.core.errors import ApiError
 from app.core.ids import new_id
+from app.core.storage import put_evidence, sniff
 from app.core.signing import load_signing_key, register_active_key
 from app.db import models as m
 from app.db.locking import lock_set
@@ -166,7 +169,9 @@ def snapshot(db: Session, p: Principal, shipment_key: str, device_id: str, *, lo
     superseded = []
     if _queue_empty_at_head(dev, local_seq, local_head, pending):
         for old in db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.device_id == dev.id, m.OfflineSnapshot.shipment_id == s.id,
-                                                              m.OfflineSnapshot.settled_at.is_(None)).with_for_update().execution_options(populate_existing=True)):
+                                                              m.OfflineSnapshot.settled_at.is_(None),
+                                                              # a lost-device recovery settles only through physical reconciliation, never by refresh
+                                                              m.OfflineSnapshot.recovery_requested_at.is_(None)).with_for_update().execution_options(populate_existing=True)):
             _settle(db, old, "SUPERSEDED", p.id, dev, f"Refreshed by {sid} with an empty queue", now)
             superseded.append(old.id)
     db.add(m.OfflineSnapshot(id=sid, device_id=dev.id, shipment_id=s.id, operator_id=p.id, kid=kid, token=token, issued_at=now, expires_at=now + timedelta(seconds=ttl)))
@@ -202,53 +207,126 @@ def settle(db: Session, p: Principal, snapshot_id: str, device_id: str, local_se
     return snapshot_view(db, sn)
 
 
-def recover(db: Session, p: Principal, snapshot_id: str, reason: str, evidence_ids: list[str] | None = None) -> dict:
-    """Lost or unavailable device. Recovery ends the snapshot's offline authority at once, but does not by itself clear
-    the shipment: nothing is assumed reconciled. It settles only with linked physical reconciliation evidence (an
-    uploaded count/inspection record) or when the DEVICE_RECONCILIATION task it raises is completed."""
+def _lock_recovery(db: Session, snapshot_id: str) -> tuple[m.Device, m.Shipment, m.OfflineSnapshot]:
+    """Device row, then the shipment, then the snapshot (the module's lock order)."""
     sn0 = db.get(m.OfflineSnapshot, snapshot_id)
     if not sn0:
         raise ApiError(404, "SNAPSHOT_NOT_FOUND", "Snapshot not found")
     dev = db.scalars(select(m.Device).where(m.Device.id == sn0.device_id).with_for_update().execution_options(populate_existing=True)).one()
     [ship] = lock_set(db).lock(m.Shipment, [sn0.shipment_id])
     sn = db.scalars(select(m.OfflineSnapshot).where(m.OfflineSnapshot.id == snapshot_id).with_for_update().execution_options(populate_existing=True)).one()
+    return dev, ship, sn
+
+
+def recover(db: Session, p: Principal, snapshot_id: str, reason: str, evidence_ids: list[str] | None = None) -> dict:
+    """Lost or unavailable device. Recovery ends the snapshot's offline authority at once, but does not by itself clear
+    the shipment: nothing is assumed reconciled. It raises a DEVICE_RECONCILIATION task, and settles only when a quality
+    engineer or manager attaches the physical reconciliation record made for it (`attach_recovery_record`), or completes
+    that task with a recorded disposition. A generic upload is never accepted as that record."""
+    dev, ship, sn = _lock_recovery(db, snapshot_id)
     if sn.settled_at:
         raise ApiError(409, "SNAPSHOT_SETTLED", f"Already settled ({sn.settlement})", snapshot_view(db, sn))
-    evidence = []
-    for sha in dict.fromkeys(evidence_ids or []):
-        ev = db.get(m.Evidence, sha)
-        if not ev:
-            raise ApiError(422, "EVIDENCE_NOT_FOUND", f"Evidence {sha[:12]}… does not exist; upload the reconciliation record first")
-        evidence.append({"sha256": ev.sha256, "media_type": ev.media_type, "evidence_source": ev.evidence_source})
-    now = datetime.now(UTC)
     first = sn.recovery_requested_at is None
-    if first:
-        sn.recovery_requested_at = now
-        sn.recovery_task_id = segregation.create(
-            db, type="DEVICE_RECONCILIATION", dedupe_key=f"device-recon:{sn.id}", shipment_id=ship.id,
-            reason=f"Device {dev.id} ({db.get(m.User, dev.operator_id).username}) is unavailable: physically reconcile {ship.code}'s truck and "
-                   f"staging lane against the manifest before release. Recovery reason: {reason}",
-            consignee_action={"action": "Count the crates on the truck and in staging; compare with the manifest; record what was found"})
-    elif not evidence:
-        raise ApiError(409, "RECOVERY_IN_PROGRESS", "Recovery already requested: complete its reconciliation task or attach reconciliation evidence",
+    if first and evidence_ids:
+        raise ApiError(409, "RECOVERY_NOT_REQUESTED", "Request the recovery first, then attach the physical reconciliation record made for it",
                        snapshot_view(db, sn))
-    settled = bool(evidence)
-    if settled:
-        sn.recovery_evidence = evidence
-        _settle(db, sn, "RECOVERED", p.id, dev, reason, now)
-        task = db.scalars(select(m.SegregationTask).where(m.SegregationTask.id == sn.recovery_task_id).with_for_update()
-                          .execution_options(populate_existing=True)).first()
-        if task and task.status == "OPEN":
-            task.status, task.completed_by, task.completed_at = "COMPLETED", p.id, now
-            task.completion_reason = f"Closed by linked reconciliation evidence: {', '.join(e['sha256'][:12] for e in evidence)}"
+    for sha in dict.fromkeys(evidence_ids or []):
+        _recovery_evidence(db, sn, sha)          # always refuses: records are bound and consumed only by attach_recovery_record
+    if not first:
+        raise ApiError(409, "RECOVERY_IN_PROGRESS", "Recovery already requested: attach its reconciliation record or complete its reconciliation task",
+                       snapshot_view(db, sn))
+    sn.recovery_requested_at = datetime.now(UTC)
+    sn.recovery_task_id = segregation.create(
+        db, type="DEVICE_RECONCILIATION", dedupe_key=f"device-recon:{sn.id}", shipment_id=ship.id,
+        reason=f"Device {dev.id} ({db.get(m.User, dev.operator_id).username}) is unavailable: physically reconcile {ship.code}'s truck and "
+               f"staging lane against the manifest before release. Recovery reason: {reason}",
+        consignee_action={"action": "Count the crates on the truck and in staging; compare with the manifest; record what was found"})
     db.flush()
-    audit.append(db, p.username, "OFFLINE_DEVICE_RECOVERED" if settled else "OFFLINE_DEVICE_RECOVERY_REQUESTED", "device", dev.id, reason,
-                 data={"snapshot": sn.id, "shipment": sn.shipment_id, "server_seq": dev.last_seq, "server_head": dev.head_hash,
-                       "evidence": [e["sha256"] for e in evidence], "task": sn.recovery_task_id})
-    if first:
-        raise_alert(db, type="OFFLINE_DEVICE_RECOVERED", severity="HIGH", entity_type="SHIPMENT", entity_id=sn.shipment_id, reason_codes=["DEVICE_RECOVERED"],
-                    details={"device_id": dev.id, "snapshot_id": sn.id, "operator": db.get(m.User, dev.operator_id).username, "reason": reason},
-                    dedupe_key=f"recover:{sn.id}")
+    audit.append(db, p.username, "OFFLINE_DEVICE_RECOVERY_REQUESTED", "device", dev.id, reason,
+                 data={"snapshot": sn.id, "shipment": sn.shipment_id, "server_seq": dev.last_seq, "server_head": dev.head_hash, "task": sn.recovery_task_id})
+    raise_alert(db, type="OFFLINE_DEVICE_RECOVERED", severity="HIGH", entity_type="SHIPMENT", entity_id=sn.shipment_id, reason_codes=["DEVICE_RECOVERED"],
+                details={"device_id": dev.id, "snapshot_id": sn.id, "operator": db.get(m.User, dev.operator_id).username, "reason": reason},
+                dedupe_key=f"recover:{sn.id}")
+    return snapshot_view(db, sn)
+
+
+def _recovery_evidence(db: Session, sn: m.OfflineSnapshot, sha: str) -> dict:
+    """An evidence digest cited by the generic recover call. Uploads carry no binding to a recovery, so none can settle
+    one: the record must be attached to the pending recovery itself, which binds and consumes it in one transaction."""
+    ev = db.get(m.Evidence, sha)
+    if not ev:
+        raise ApiError(422, "EVIDENCE_NOT_FOUND", f"Evidence {sha[:12]}… does not exist")
+    rec = db.get(m.RecoveryRecord, sha)
+    why = (f"it is the reconciliation record of {rec.snapshot_id}" if rec else
+           "a generic upload is not bound to this recovery; attach the recount through POST /offline/snapshots/{id}/recovery-record")
+    raise ApiError(422, "EVIDENCE_NOT_LINKED", f"Evidence {sha[:12]}… cannot settle this recovery: {why}",
+                   {"sha256": sha, "evidence_source": ev.evidence_source, "snapshot_id": sn.id})
+
+
+RECOVERY_DISPOSITIONS = ("MATCHES_MANIFEST", "DISCREPANCY_SEGREGATED")
+RECOVERY_LOCATIONS = ("TRUCK", "STAGING_LANE")
+RECORD_MEDIA = ("application/pdf", "image/jpeg", "image/png")
+
+
+def attach_recovery_record(db: Session, p: Principal, snapshot_id: str, data: bytes, filename: str, *, disposition: str,
+                           counted_packages: list[str], locations: list[str], note: str) -> dict:
+    """Settle a pending recovery with the physical reconciliation record made for it. In ONE transaction, under the
+    device → shipment → snapshot → task locks: store the file (new bytes only), bind it to this task, snapshot and
+    shipment with the attester and the scope they counted, consume it, complete the task and settle the snapshot.
+    Anything refused rolls back whole: the recovery stays outstanding and the shipment stays blocked."""
+    if not p.has("quality_engineer", "quality_manager"):
+        raise ApiError(403, "ROLE_FORBIDDEN", "A lost device's physical reconciliation is attested by a quality engineer or manager")
+    dev, ship, sn = _lock_recovery(db, snapshot_id)
+    if sn.settled_at:
+        raise ApiError(409, "SNAPSHOT_SETTLED", f"Already settled ({sn.settlement})", snapshot_view(db, sn))
+    if not sn.recovery_requested_at or not sn.recovery_task_id:
+        raise ApiError(409, "RECOVERY_NOT_REQUESTED", "Request the recovery first; the record is made for its reconciliation task", snapshot_view(db, sn))
+    task = db.scalars(select(m.SegregationTask).where(m.SegregationTask.id == sn.recovery_task_id).with_for_update()
+                      .execution_options(populate_existing=True)).one()
+    if task.status != "OPEN" or task.type != "DEVICE_RECONCILIATION" or task.shipment_id != ship.id:
+        raise ApiError(409, "TASK_COMPLETED", "This recovery's reconciliation task is no longer open", {"task_id": task.id, "status": task.status})
+    bad = lambda code, msg, details=None: ApiError(422, code, msg, {"snapshot_id": sn.id, "task_id": task.id, **(details or {})})
+    if disposition not in RECOVERY_DISPOSITIONS:
+        raise bad("VALIDATION", f"disposition must be one of {list(RECOVERY_DISPOSITIONS)}", {"field": "disposition"})
+    if set(locations) != set(RECOVERY_LOCATIONS):
+        raise bad("RECONCILIATION_SCOPE_INCOMPLETE", "Count both the truck and the staging lane", {"field": "locations", "required": list(RECOVERY_LOCATIONS)})
+    note = note.strip()
+    manifest = sorted(db.scalars(select(m.Package.label).join(m.Load, m.Load.package_id == m.Package.id)
+                                 .where(m.Load.shipment_id == ship.id, m.Load.removed_at.is_(None))))
+    counted = sorted(dict.fromkeys(x.strip() for x in counted_packages if x.strip()))
+    if disposition == "MATCHES_MANIFEST" and counted != manifest:
+        raise bad("COUNT_MISMATCH", "The counted crates differ from the manifest: record DISCREPANCY_SEGREGATED with what was done",
+                  {"manifest": manifest, "counted": counted, "missing": sorted(set(manifest) - set(counted)), "extra": sorted(set(counted) - set(manifest))})
+    if disposition == "DISCREPANCY_SEGREGATED" and len(note) < 10:
+        raise bad("VALIDATION", "Describe the discrepancy and how the crates were segregated", {"field": "note"})
+    media = sniff(data)
+    if media not in RECORD_MEDIA:
+        raise ApiError(415, "INVALID_MEDIA", "Attach the recount as a PDF, JPEG or PNG", {"allowed": list(RECORD_MEDIA)})
+    sha = hashlib.sha256(data).hexdigest()
+    if db.get(m.Evidence, sha):
+        raise bad("EVIDENCE_NOT_LINKED", "This exact file was stored before; attach the record made for this recovery", {"sha256": sha})
+    scope = {"locations": sorted(locations), "packages": counted, "note": note or None}
+    try:
+        with db.begin_nested():   # a concurrent attach of the same bytes anywhere loses here (digest is the key)
+            put_evidence(db, data, media, "UPLOAD", p.id)
+            db.add(m.RecoveryRecord(sha256=sha, snapshot_id=sn.id, task_id=task.id, shipment_id=ship.id, attested_by=p.id,
+                                    disposition=disposition, counted_scope=scope, manifest=manifest))
+            db.flush()
+    except IntegrityError:
+        raise bad("EVIDENCE_NOT_LINKED", "This record was already attached to another recovery", {"sha256": sha})
+    now = datetime.now(UTC)
+    record = {"sha256": sha, "media_type": media, "evidence_source": "UPLOAD", "uploaded_by": p.username, "uploaded_at": _iso(now),
+              "for_snapshot": sn.id, "recovery_task_id": task.id, "shipment_id": ship.id, "disposition": disposition, "counted_scope": scope,
+              "manifest": manifest, "filename": (filename or "record")[:120]}
+    sn.recovery_evidence = [*(sn.recovery_evidence or []), record]
+    _settle(db, sn, "RECOVERED", p.id, dev, f"Physical reconciliation: {disposition}" + (f" — {note}" if note else ""), now)
+    task.status, task.completed_by, task.completed_at = "COMPLETED", p.id, now
+    task.completion_reason = f"{disposition}: counted {len(counted)} crate(s) on the truck and in staging (record {sha[:12]})" + (f"; {note}" if note else "")
+    db.flush()
+    audit.append(db, p.username, "OFFLINE_DEVICE_RECOVERED", "device", dev.id, task.completion_reason,
+                 data={"snapshot": sn.id, "shipment": ship.id, "task": task.id, "evidence": [sha], "disposition": disposition,
+                       "counted": counted, "manifest": manifest, "server_seq": dev.last_seq, "server_head": dev.head_hash})
+    outbox.emit(db, "DISPATCH_STATE_CHANGED", "SHIPMENT", ship.id, reason_codes=["DEVICE_RECOVERED"], payload={"snapshot_id": sn.id, "task_id": task.id})
     return snapshot_view(db, sn)
 
 
@@ -282,8 +360,11 @@ def _verify_batch(head: str, last_seq: int, events: list[dict]) -> tuple[list[di
 
 def _replay_result(db: Session, prior: m.DeviceEvent, e: dict) -> dict:
     sc = db.get(m.Scan, prior.scan_id) if prior.scan_id else None
-    res = {"client_event_id": e["client_event_id"], "seq": e["seq"], "outcome": "DUPLICATE", "original_outcome": prior.outcome,
-           "scan": dispatch.scan_view(db, sc, replay=True) if sc else None, "note": "Already synced"}
+    # The business outcome is the one first decided. An ONLINE event first reconciled as DUPLICATE carries its linked
+    # online scan's decision; the replay disposition (DUPLICATE) is reported separately, never in its place.
+    original = sc.decision if prior.outcome == "DUPLICATE" and sc else prior.outcome
+    res = {"client_event_id": e["client_event_id"], "seq": e["seq"], "outcome": "DUPLICATE", "original_outcome": original,
+           "recorded_disposition": prior.outcome, "scan": dispatch.scan_view(db, sc, replay=True) if sc else None, "note": "Already synced"}
     if prior.outcome == "CONFLICT":   # the first response may never have reached the phone: repeat the physical instruction
         task = db.scalars(select(m.SegregationTask).where(m.SegregationTask.dedupe_key == f"offline:{e['client_event_id']}")).first()
         res |= {"note": task.reason if task else "Conflict recorded at first sync; a quality engineer must review this event",
@@ -293,13 +374,20 @@ def _replay_result(db: Session, prior: m.DeviceEvent, e: dict) -> dict:
 
 def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, events: list[dict]) -> dict:
     dev = _device(db, p, device_id, create=False)
+    legacy_null = set()   # v1 events sent with an explicit null claim (see the replay check below)
     for e in events:
         if e.get("local_decision") not in LOCAL:
             raise ApiError(422, "VALIDATION", f"local_decision must be one of {sorted(LOCAL)}")
         parse_capture_time(e["scanned_at"])
         if e.get("chain_version", 1) == 1:
-            e["snapshot_id"] = e.get("snapshot_id") or snapshot_id        # v1: the claim may come from the batch default
-        # v2: the snapshot id is inside the hash; the event's own value (null for ONLINE) is the claim, never a default
+            if "snapshot_id" not in e:                                    # v1: an ABSENT claim may come from the batch default;
+                e["snapshot_id"] = snapshot_id                            # an explicit null stays "no snapshot"
+            elif e["snapshot_id"] is None and snapshot_id:
+                legacy_null.add(e["seq"])
+        elif "snapshot_id" not in e:
+            # v2: the snapshot id is inside the hash; the event's own value (null for ONLINE) is the claim, never a default
+            raise ApiError(422, "VALIDATION", f"Event seq {e.get('seq')}: chain v2 requires an explicit snapshot_id (null for online scans)",
+                           {"seq": e.get("seq"), "field": "snapshot_id"})
     if snapshot_id:
         snap = db.get(m.OfflineSnapshot, snapshot_id)
         if not snap or snap.device_id != dev.id:
@@ -320,7 +408,13 @@ def sync(db: Session, p: Principal, device_id: str, snapshot_id: str | None, eve
         if e.get("chain_version", 1) != prior.chain_version:
             raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} was synced as chain v{prior.chain_version}",
                            {"seq": e["seq"], "field": "chain_version", "original": prior.chain_version})
-        if (prior.claim_recorded or prior.claimed_snapshot_id is not None) and e.get("snapshot_id") != prior.claimed_snapshot_id:
+        claim = e.get("snapshot_id")
+        # Before R2 a v1 explicit null was replaced by the batch snapshot, and that effective claim is what was stored.
+        # A RETRY of such an already-committed event (same content, same batch) still matches it. Only replays reach
+        # this loop: a new capture never gets the fallback.
+        if e["seq"] in legacy_null and prior.chain_version == 1 and prior.claimed_snapshot_id == snapshot_id:
+            claim = snapshot_id
+        if (prior.claim_recorded or prior.claimed_snapshot_id is not None) and claim != prior.claimed_snapshot_id:
             raise ApiError(409, "EVENT_CONTENT_CHANGED", f"Event seq {e['seq']} now cites a different snapshot than when it was synced",
                            {"seq": e["seq"], "field": "snapshot_id", "original": prior.claimed_snapshot_id})
         results.append(_replay_result(db, prior, e))
@@ -371,11 +465,15 @@ def _snapshot_reasons(db: Session, p: Principal, device_id: str, snap: m.Offline
     return [], signed
 
 
-def _version_reasons(dev: m.Device, version: int, floor: int) -> list[dict]:
-    """A recorded event below the floor, or below what this device already wrote (an outdated tab sharing its queue),
-    is kept for reconciliation but never confers load authority."""
+def _version_reasons(dev: m.Device, version: int, floor: int, writer: int = 1) -> list[dict]:
+    """A recorded event below the floor, below the plant's current writer (a legacy queue drained after the switch), or
+    below what this device already wrote (an outdated tab sharing its queue), is kept for reconciliation but never
+    confers load authority. Already-synced events replay exactly as first recorded."""
     if version < floor:
         return [{"code": "CHAIN_VERSION_BELOW_FLOOR", "message": f"Captured by a v{version} writer; the plant requires v{floor} — update the scanner"}]
+    if version < writer:
+        return [{"code": "CHAIN_VERSION_BELOW_WRITER", "message": f"Captured by a v{version} writer after the plant switched to v{writer}; "
+                                                                "verify the crate physically"}]
     if version < dev.chain_version_high:
         return [{"code": "CHAIN_VERSION_REGRESSION", "message": f"v{version} event after this device already wrote v{dev.chain_version_high} (outdated tab?)"}]
     return []
@@ -395,17 +493,39 @@ def _provenance_conflict(db: Session, p: Principal, device_id: str, e: dict, pri
     """An existing scan owns this event id, but this capture did not produce it. Never adopt its decision.
     The shipment row is locked BEFORE anything is written, so a blocking task cannot slip past a concurrent departure."""
     if physical and ship:
-        lock_set(db).lock(m.Shipment, [ship.id])
+        [ship] = lock_set(db).lock(m.Shipment, [ship.id])
+    kind, instruction, action = _physical_instruction(db, ship, "the crate") if physical and ship else (None, "", None)
     note = ("This event's id is already used by a different recorded scan; it was not linked or loaded."
-            + (" The crate may have been staged: physically verify and segregate it." if physical else " A quality engineer must review it."))
+            + (f" The crate may have been staged: {instruction}." if physical else " A quality engineer must review it."))
     audit.append(db, p.username, "DEVICE_EVENT_PROVENANCE_MISMATCH", "device", device_id, note,
                  data={"client_event_id": e["client_event_id"], "recorded_scan": prior.id, "seq": e["seq"], "local_decision": e["local_decision"]})
     raise_alert(db, type="OFFLINE_CONFLICT", severity="HIGH", entity_type="DEVICE", entity_id=device_id, reason_codes=["EVENT_PROVENANCE_MISMATCH"],
                 details={"client_event_id": e["client_event_id"], "device_id": device_id, "recorded_scan": prior.id},
                 dedupe_key=f"provenance:{e['client_event_id']}", audible=physical)
-    task = segregation.create(db, type="SEGREGATION_REQUIRED", dedupe_key=f"offline:{e['client_event_id']}", shipment_id=ship.id if ship else None,
-                              reason=note) if physical else None
+    task = segregation.create(db, type=kind or "SEGREGATION_REQUIRED", dedupe_key=f"offline:{e['client_event_id']}", shipment_id=ship.id if ship else None,
+                              reason=note, consignee_action=action) if physical else None
     return note, task
+
+
+def _physical_instruction(db: Session, ship: m.Shipment, label: str) -> tuple[str, str, dict]:
+    """(task type, instruction, consignee_action) for a crate that may be on this shipment, judged from the shipment's
+    RECORDED state under its row lock. A dock can only act on a truck that is still at the plant; after departure the
+    carrier intercepts, after delivery the consignee is notified."""
+    order = db.get(m.Order, ship.order_id)
+    cus = db.get(m.Customer, order.customer_id) if order else None
+    where = {"shipment": ship.code, "vehicle_no": ship.vehicle_no, "customer": f"{cus.name} - {cus.city}" if cus else None, "package": label,
+             "shipment_status": ship.status}
+    if ship.status == "IN_TRANSIT":
+        return ("IN_TRANSIT_RECALL",
+                f"{ship.code} has already departed on {ship.vehicle_no}: contact the carrier to intercept it, verify whether {label} is aboard and "
+                f"quarantine it on arrival",
+                {"action": "Contact the carrier: intercept the truck, verify the crate and quarantine it on arrival", **where})
+    if ship.status == "DELIVERED":
+        return ("NOTIFY_CUSTOMER",
+                f"{ship.code} was delivered to {where['customer']}: notify the consignee to locate and quarantine {label} and arrange its return",
+                {"action": "Notify the consignee: locate and quarantine the crate; arrange return", **where})
+    return ("SEGREGATION_REQUIRED", f"physically unload and segregate {label}",
+            {"action": segregation.ACTION["SEGREGATION_REQUIRED"], **where})
 
 
 def _apply(p: Principal, device_id: str, e: dict) -> dict:
@@ -417,45 +537,73 @@ def _apply(p: Principal, device_id: str, e: dict) -> dict:
         # Read the version floor under the policy lock (shared): a floor change waits for this decision, never splits it.
         db.execute(text("SELECT pg_advisory_xact_lock_shared(:k)"), {"k": policies.POLICY_LOCK})
         version = e.get("chain_version", 1)
-        below_floor = _version_reasons(dev, version, policies.settings_of(policies.active(db)).offline.chain_min_version)
+        chain_pol = policies.settings_of(policies.active(db)).offline
+        below_floor = _version_reasons(dev, version, chain_pol.chain_min_version, chain_pol.chain_writer_version)
         scanned_at = parse_capture_time(e["scanned_at"])
         claim = e.get("snapshot_id")
         snap = db.get(m.OfflineSnapshot, claim) if claim else None
         ship = db.get(m.Shipment, e["shipment_id"])
         ld = e["local_decision"]
         view, note, outcome, task, original = None, "", None, None, None
+
+        def gate(**kw):
+            """Replay through the dispatch gate. None when another request already owns this event id: ownership is
+            decided by the unique insert, so a scan that commits while this capture is being judged is never adopted."""
+            try:
+                v, created = dispatch.scan(db, p, e["shipment_id"], e["token"], e["client_event_id"], device_id, offline=True,
+                                           captured_at=scanned_at, **kw)
+            except ApiError as err:
+                if err.code not in ("EVENT_PROVENANCE_MISMATCH", "EVENT_ID_REUSED"):
+                    raise
+                return None
+            return v if created else None
+
+        def owned_online(sc: m.Scan | None) -> bool:
+            """Only the device's own online request (same device, operator, origin and shipment+token) reconciles an ONLINE event."""
+            return bool(sc and ship and sc.device_id == device_id and sc.actor_id == p.id and not sc.offline
+                        and sc.content_sha256 == dispatch.content_sha(ship.id, e["token"]))
+
+        def adopt_or_conflict(sc: m.Scan) -> tuple:
+            if ld == "ONLINE" and owned_online(sc):
+                return dispatch.scan_view(db, sc, replay=True), "DUPLICATE", sc.decision, f"Online decision recovered: {sc.decision}", None
+            n, t = _provenance_conflict(db, p, device_id, e, sc, ship, physical=ld == "PROVISIONAL_ACCEPT")
+            return None, "CONFLICT", None, n, t
+
         prior = db.scalars(select(m.Scan).where(m.Scan.client_event_id == e["client_event_id"])).first()
-        if ld == "ONLINE" and prior and ship and prior.device_id == device_id and prior.actor_id == p.id and not prior.offline \
-                and prior.content_sha256 == dispatch.content_sha(ship.id, e["token"]):
-            view, outcome, original = dispatch.scan_view(db, prior, replay=True), "DUPLICATE", prior.decision
-            note = f"Online decision recovered: {prior.decision}"
-        elif prior:
-            outcome = "CONFLICT"
-            note, task = _provenance_conflict(db, p, device_id, e, prior, ship, physical=ld == "PROVISIONAL_ACCEPT")
+        if prior:
+            view, outcome, original, note, task = adopt_or_conflict(prior)
         elif ld == "ONLINE":
-            view, _ = dispatch.scan(db, p, e["shipment_id"], e["token"], e["client_event_id"], device_id, offline=True, captured_at=scanned_at, commit_load=False)
-            outcome, note = "BLOCKED", "Online request never reached the server — recorded, not loaded"
+            view = gate(commit_load=False)
+            outcome, note = ("BLOCKED", "Online request never reached the server — recorded, not loaded") if view else (None, "")
         elif ld == "LOCAL_BLOCK":
-            view, _ = dispatch.scan(db, p, e["shipment_id"], e["token"], e["client_event_id"], device_id, offline=True, captured_at=scanned_at, commit_load=False)
-            outcome, note = "BLOCKED", "Blocked on device — recorded, not loaded"
+            view = gate(commit_load=False)
+            outcome, note = ("BLOCKED", "Blocked on device — recorded, not loaded") if view else (None, "")
         else:
             untrusted, scope = _snapshot_reasons(db, p, device_id, snap, claim, ship.id if ship else e["shipment_id"], scanned_at)
             untrusted = below_floor + untrusted
-            view, _ = dispatch.scan(db, p, e["shipment_id"], e["token"], e["client_event_id"], device_id, offline=True, captured_at=scanned_at,
-                                    authorize=lambda pkg: untrusted or _allowlist_reasons(scope, pkg))
-            if view["decision"] == "ACCEPTED":
+            view = gate(authorize=lambda pkg: untrusted or _allowlist_reasons(scope, pkg))
+            if view is None:
+                pass   # another request owns this event id (it won the race): handled below, never adopted
+            elif view["decision"] == "ACCEPTED":
                 outcome = "ACCEPTED"
             else:
                 outcome = "CONFLICT"
                 codes = [r["code"] for r in view["reasons"]]
                 label = view.get("package_label") or "unidentified package"
-                note = f"Server refused the provisional load ({', '.join(codes)}): physically unload and segregate {label}"
-                task = segregation.create(db, type="SEGREGATION_REQUIRED", dedupe_key=f"offline:{e['client_event_id']}", scan_id=view["scan_id"],
-                                          package_id=view.get("package_id"), shipment_id=view["shipment_id"], reason=note)
+                kind, instruction, action = _physical_instruction(db, db.get(m.Shipment, view["shipment_id"]), label)
+                note = f"Server refused the provisional load ({', '.join(codes)}): {instruction}"
+                task = segregation.create(db, type=kind, dedupe_key=f"offline:{e['client_event_id']}", scan_id=view["scan_id"],
+                                          package_id=view.get("package_id"), shipment_id=view["shipment_id"], reason=note, consignee_action=action)
                 raise_alert(db, type="OFFLINE_CONFLICT", severity="HIGH", entity_type="SHIPMENT", entity_id=view["shipment_id"], reason_codes=codes,
                             details={"client_event_id": e["client_event_id"], "device_id": device_id, "package": label, "task_id": task},
                             dedupe_key=f"offline-conflict:{e['client_event_id']}", audible=True)
-        valid_assoc = snap is not None and snap.device_id == device_id and snap.operator_id == p.id
+        if outcome is None:   # lost the event id to a concurrent request
+            winner = db.scalars(select(m.Scan).where(m.Scan.client_event_id == e["client_event_id"])).one()
+            view, outcome, original, note, task = adopt_or_conflict(winner)
+        # Only a claim that names this device's, this operator's snapshot FOR THIS SHIPMENT is stored as an association;
+        # anything else is kept verbatim in claimed_snapshot_id and nowhere else.
+        valid_assoc = snap is not None and ship is not None and snap.device_id == device_id and snap.operator_id == p.id \
+            and snap.shipment_id == ship.id
         db.add(m.DeviceEvent(device_id=device_id, seq=e["seq"], client_event_id=e["client_event_id"], prev_hash=e["prev_hash"], hash=e["hash"],
                              snapshot_id=snap.id if valid_assoc else None, claimed_snapshot_id=claim, claim_recorded=True, chain_version=version, scan_id=view["scan_id"] if view else None,
                              local_decision=ld, outcome=outcome, scanned_at=scanned_at, operator_id=p.id))

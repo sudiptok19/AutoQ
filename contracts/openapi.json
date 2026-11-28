@@ -155,6 +155,41 @@
         "title": "Body_re_enroll_api_v1_packages__key__re_enroll_post",
         "type": "object"
       },
+      "Body_recovery_record_api_v1_offline_snapshots__snapshot_id__recovery_record_post": {
+        "properties": {
+          "counted_packages": {
+            "default": "[]",
+            "title": "Counted Packages",
+            "type": "string"
+          },
+          "disposition": {
+            "title": "Disposition",
+            "type": "string"
+          },
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          },
+          "locations": {
+            "default": "[\"TRUCK\", \"STAGING_LANE\"]",
+            "title": "Locations",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "disposition"
+        ],
+        "title": "Body_recovery_record_api_v1_offline_snapshots__snapshot_id__recovery_record_post",
+        "type": "object"
+      },
       "Body_seal_api_v1_packages__key__seal_post": {
         "properties": {
           "evidence_source": {
@@ -191,6 +226,25 @@
           "image"
         ],
         "title": "Body_seal_check_api_v1_packages__package_id__seal_checks_post",
+        "type": "object"
+      },
+      "Body_upload_api_v1_evidence_post": {
+        "properties": {
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          },
+          "purpose": {
+            "default": "REVIEW_RECORD",
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_api_v1_evidence_post",
         "type": "object"
       },
       "Body_upload_golden_api_v1_inspection_profiles__profile_id__golden_post": {
@@ -307,6 +361,15 @@
       },
       "EventIn": {
         "properties": {
+          "chain_version": {
+            "default": 1,
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Chain Version",
+            "type": "integer"
+          },
           "client_event_id": {
             "maxLength": 80,
             "minLength": 1,
@@ -348,6 +411,18 @@
           "shipment_id": {
             "title": "Shipment Id",
             "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
           },
           "token": {
             "maxLength": 8192,
@@ -647,6 +722,27 @@
         "title": "MoveIn",
         "type": "object"
       },
+      "Offline": {
+        "description": "Device-chain versions. Readers accept every supported version; these two knobs roll writers forward safely.\nchain_writer_version: what scanners should write next (raise only after every reader understands it).\nchain_min_version: the floor. A newer event below it is recorded for reconciliation but never gets load authority.",
+        "properties": {
+          "chain_min_version": {
+            "default": 1,
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Chain Min Version",
+            "type": "integer"
+          },
+          "chain_writer_version": {
+            "default": 1,
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Chain Writer Version",
+            "type": "integer"
+          }
+        },
+        "title": "Offline",
+        "type": "object"
+      },
       "OrderIn": {
         "properties": {
           "customer_id": {
@@ -780,6 +876,9 @@
               "min_w": 320,
               "reject_threshold": 0.7
             }
+          },
+          "offline": {
+            "$ref": "#/components/schemas/Offline"
           },
           "retention_years_provisional": {
             "default": 11,
@@ -933,6 +1032,29 @@
         "title": "RecallIn",
         "type": "object"
       },
+      "RecoverIn": {
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 10,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "RecoverIn",
+        "type": "object"
+      },
       "ReviewIn": {
         "properties": {
           "action": {
@@ -1063,6 +1185,38 @@
         "title": "Scope",
         "type": "object"
       },
+      "SettleIn": {
+        "properties": {
+          "device_id": {
+            "pattern": "^[A-Za-z0-9._\\-]{3,40}$",
+            "title": "Device Id",
+            "type": "string"
+          },
+          "local_head": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Local Head",
+            "type": "string"
+          },
+          "local_seq": {
+            "minimum": 0.0,
+            "title": "Local Seq",
+            "type": "integer"
+          },
+          "pending": {
+            "minimum": 0.0,
+            "title": "Pending",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_id",
+          "local_seq",
+          "local_head",
+          "pending"
+        ],
+        "title": "SettleIn",
+        "type": "object"
+      },
       "ShipmentIn": {
         "properties": {
           "dock": {
@@ -1113,6 +1267,75 @@
           "id"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "SpcDecisionIn": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "APPROVE",
+              "REJECT"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "lot_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Lot Ids",
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 10,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "reason"
+        ],
+        "title": "SpcDecisionIn",
+        "type": "object"
+      },
+      "SpcQuarantineIn": {
+        "properties": {
+          "lot_id": {
+            "title": "Lot Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lot_id"
+        ],
+        "title": "SpcQuarantineIn",
+        "type": "object"
+      },
+      "SpcReviewIn": {
+        "properties": {
+          "alert_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alert Id"
+          },
+          "inspection_id": {
+            "title": "Inspection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "inspection_id"
+        ],
+        "title": "SpcReviewIn",
         "type": "object"
       },
       "SupplierIn": {
@@ -1815,6 +2038,258 @@
         "tags": [
           "catalog",
           "lots"
+        ]
+      }
+    },
+    "/api/v1/dashboard/summary": {
+      "get": {
+        "operationId": "summary_api_v1_dashboard_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Summary Api V1 Dashboard Summary Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Summary",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/demo/fixtures/part/{kind}": {
+      "get": {
+        "operationId": "part_fixture_api_v1_demo_fixtures_part__kind__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "golden",
+                "good",
+                "defect",
+                "blurry",
+                "glare"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "seed",
+            "required": false,
+            "schema": {
+              "default": 11,
+              "maximum": 1000000,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Part Fixture",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/demo/fixtures/seal/{kind}": {
+      "get": {
+        "operationId": "seal_fixture_api_v1_demo_fixtures_seal__kind__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "enroll",
+                "intact",
+                "torn",
+                "bad_light"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "seed",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "maximum": 1000000,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Seal Fixture",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "description": "Durable recovery for a client that was not connected: committed outbox events (the same envelope the socket\nsends) at or after `since`, at or above `min_severity`, plus anything that sounded the siren. Served from the\noutbox itself, so an event is here even if its live push was never delivered. At most the last 24 h.",
+        "operationId": "catch_up_api_v1_events_get",
+        "parameters": [
+          {
+            "description": "ISO time with timezone; overlap a little and dedupe by event_id",
+            "in": "query",
+            "name": "since",
+            "required": true,
+            "schema": {
+              "description": "ISO time with timezone; overlap a little and dedupe by event_id",
+              "format": "date-time",
+              "title": "Since",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_severity",
+            "required": false,
+            "schema": {
+              "default": "HIGH",
+              "pattern": "^(MEDIUM|HIGH|CRITICAL)$",
+              "title": "Min Severity",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Catch Up Api V1 Events Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Catch Up",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/api/v1/evidence": {
+      "post": {
+        "operationId": "upload_api_v1_evidence_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_api_v1_evidence_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Upload Api V1 Evidence Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload",
+        "tags": [
+          "auth",
+          "evidence",
+          "audit"
         ]
       }
     },
@@ -2706,6 +3181,7 @@
     },
     "/api/v1/offline/snapshot": {
       "get": {
+        "description": "`local_seq`/`local_head`/`pending` let a device with an empty queue at the server head settle its OLDER\nsnapshots for this shipment while refreshing (never the one being issued).",
         "operationId": "snapshot_api_v1_offline_snapshot_get",
         "parameters": [
           {
@@ -2725,6 +3201,57 @@
               "pattern": "^[A-Za-z0-9._\\-]{3,40}$",
               "title": "Device Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "local_seq",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Local Seq"
+            }
+          },
+          {
+            "in": "query",
+            "name": "local_head",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Local Head"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pending",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pending"
             }
           }
         ],
@@ -2753,6 +3280,171 @@
           }
         },
         "summary": "Snapshot",
+        "tags": [
+          "offline"
+        ]
+      }
+    },
+    "/api/v1/offline/snapshots/{snapshot_id}/recover": {
+      "post": {
+        "description": "Lost or unavailable device: settle its authorization explicitly, with an audited reason (Quality Manager).",
+        "operationId": "recover_api_v1_offline_snapshots__snapshot_id__recover_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true,
+            "schema": {
+              "title": "Snapshot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recover Api V1 Offline Snapshots  Snapshot Id  Recover Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recover",
+        "tags": [
+          "offline"
+        ]
+      }
+    },
+    "/api/v1/offline/snapshots/{snapshot_id}/recovery-record": {
+      "post": {
+        "description": "Settle a requested recovery with the physical recount made for it: the file is bound to this recovery's task,\nsnapshot and shipment, with who attested it and what they counted, and consumed in the same transaction.",
+        "operationId": "recovery_record_api_v1_offline_snapshots__snapshot_id__recovery_record_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true,
+            "schema": {
+              "title": "Snapshot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_recovery_record_api_v1_offline_snapshots__snapshot_id__recovery_record_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Recovery Record Api V1 Offline Snapshots  Snapshot Id  Recovery Record Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recovery Record",
+        "tags": [
+          "offline"
+        ]
+      }
+    },
+    "/api/v1/offline/snapshots/{snapshot_id}/settle": {
+      "post": {
+        "description": "End an offline session: the device hands back its authorization (requires an empty queue at the server head).",
+        "operationId": "settle_api_v1_offline_snapshots__snapshot_id__settle_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true,
+            "schema": {
+              "title": "Snapshot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettleIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Settle Api V1 Offline Snapshots  Snapshot Id  Settle Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Settle",
         "tags": [
           "offline"
         ]
@@ -4393,6 +5085,223 @@
         ]
       }
     },
+    "/api/v1/spc-reviews": {
+      "get": {
+        "operationId": "list_spc_reviews_api_v1_spc_reviews_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Spc Reviews Api V1 Spc Reviews Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Spc Reviews",
+        "tags": [
+          "containment"
+        ]
+      },
+      "post": {
+        "description": "Run Astra's investigation + recommendation for an inspection (usually a drift alert's) and freeze the result.",
+        "operationId": "create_spc_review_api_v1_spc_reviews_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpcReviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Spc Review Api V1 Spc Reviews Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Spc Review",
+        "tags": [
+          "containment"
+        ]
+      }
+    },
+    "/api/v1/spc-reviews/{review_id}": {
+      "get": {
+        "operationId": "get_spc_review_api_v1_spc_reviews__review_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Spc Review Api V1 Spc Reviews  Review Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Spc Review",
+        "tags": [
+          "containment"
+        ]
+      }
+    },
+    "/api/v1/spc-reviews/{review_id}/decision": {
+      "post": {
+        "operationId": "decide_spc_review_api_v1_spc_reviews__review_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpcDecisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Decide Spc Review Api V1 Spc Reviews  Review Id  Decision Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Spc Review",
+        "tags": [
+          "containment"
+        ]
+      }
+    },
+    "/api/v1/spc-reviews/{review_id}/quarantine": {
+      "post": {
+        "operationId": "quarantine_spc_lot_api_v1_spc_reviews__review_id__quarantine_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpcQuarantineIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Quarantine Spc Lot Api V1 Spc Reviews  Review Id  Quarantine Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quarantine Spc Lot",
+        "tags": [
+          "containment"
+        ]
+      }
+    },
     "/api/v1/spc/series": {
       "get": {
         "operationId": "get_series_api_v1_spc_series_get",
@@ -4871,7 +5780,7 @@
     },
     "/api/v1/ws/tickets": {
       "post": {
-        "description": "Bearer \u2192 short-lived single-use ticket, so the JWT never travels in a WebSocket URL.",
+        "description": "Bearer \u2192 short-lived single-use ticket, so the JWT never travels in a WebSocket URL. The ticket remembers when\nthat bearer session expires: the socket it opens closes then.",
         "operationId": "ticket_api_v1_ws_tickets_post",
         "responses": {
           "200": {

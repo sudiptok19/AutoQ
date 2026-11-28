@@ -64,8 +64,13 @@ def view(db: Session, r: m.SpcReview) -> dict:
 
 
 def create(db: Session, p: Principal, inspection_id: str, alert_id: str | None) -> dict:
-    if alert_id and not db.get(m.Alert, alert_id):
-        raise ApiError(404, "ALERT_NOT_FOUND", "Alert not found")
+    if alert_id:
+        if not db.get(m.Alert, alert_id):
+            raise ApiError(404, "ALERT_NOT_FOUND", "Alert not found")
+        # Link only the SPC drift warning raised for THIS inspection (recorded when the alert was raised), never any alert.
+        if not db.scalars(select(m.SpcWarning.id).where(m.SpcWarning.alert_id == alert_id, m.SpcWarning.inspection_id == inspection_id)).first():
+            raise ApiError(422, "ALERT_NOT_LINKED", "That alert is not the SPC drift warning for this inspection",
+                           {"alert_id": alert_id, "inspection_id": inspection_id})
     port = ports()
     ctx, events, rule = port.load_spc_investigation_inputs(db, inspection_id, p)
     investigation = spc.investigate(ctx, events, inspection_id, rule)

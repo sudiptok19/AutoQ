@@ -72,7 +72,7 @@ def complete(db: Session, p: Principal, task_id: str, reason: str) -> dict:
     if t.status != "OPEN":
         raise ApiError(409, "TASK_COMPLETED", "Task already completed")
     now = datetime.now(UTC)
-    unloaded, elsewhere = False, None
+    unloaded, elsewhere, reopened = False, None, None
     if t.type in ("REMOVAL_REQUIRED", "SEGREGATION_REQUIRED") and load is not None:
         if t.type == "REMOVAL_REQUIRED" and (t.shipment_id is None or load.shipment_id == t.shipment_id):
             ship = db.get(m.Shipment, load.shipment_id)
@@ -81,6 +81,10 @@ def complete(db: Session, p: Principal, task_id: str, reason: str) -> dict:
             load.removed_at, load.removed_reason = now, f"{t.type}: {reason}"
             pkg.state = "SEALED"
             unloaded = True
+            if ship.status == "CLOSED":
+                # The closed manifest no longer describes the truck: reopen it, so it must pass every close check again.
+                ship.status, ship.closed_at = "OPEN", None
+                reopened = ship
         else:
             elsewhere = db.get(m.Shipment, load.shipment_id)
             if not p.has("quality_engineer", "quality_manager"):
@@ -100,6 +104,9 @@ def complete(db: Session, p: Principal, task_id: str, reason: str) -> dict:
     audit.append(db, p.username, "SEGREGATION_LOCATION_CONFLICT_RESOLVED" if elsewhere else "SEGREGATION_TASK_COMPLETED", "segregation_task", t.id, reason, data=data)
     if unloaded:
         outbox.emit(db, "DISPATCH_STATE_CHANGED", "PACKAGE", pkg.id, severity="MEDIUM", reason_codes=[t.type], payload={"state": pkg.state, "unloaded": True})
+    if reopened:
+        audit.append(db, p.username, "MANIFEST_REOPENED", "shipment", reopened.id, f"{pkg.label} removed by task {t.id}", data={"task": t.id, "package": pkg.label})
+        outbox.emit(db, "DISPATCH_STATE_CHANGED", "SHIPMENT", reopened.id, severity="MEDIUM", reason_codes=["MANIFEST_REOPENED"], payload={"status": "OPEN"})
     out = view(db, t)
     if elsewhere:
         out["location_conflict"] = {"recorded_on": elsewhere.code, "load_left_unchanged": True}
